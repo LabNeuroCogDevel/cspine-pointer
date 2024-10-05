@@ -11,6 +11,7 @@ import re
 import sqlite3
 import os.path
 from typing import Optional, Dict
+from tkinter.filedialog import asksaveasfilename
 
 LABELS_DICT = {
           "C2": ["p", "m", "a"],
@@ -308,12 +309,20 @@ class App(tk.Frame):
     def save_full(self, fname:Optional[str] = None):
         """
         save all points to a tab delimited text file with header and comment
+        NB. called from button binding. needs return "break" to reset button (otherwise it stays sunken/depressed)
         """
         if fname is None:
             fname = re.sub('.nii(.gz)$', '', self.img.fname) +\
                 f"_cspine-{os.environ['USER']}_create-{datetime.datetime.now().strftime('%FT%H%M%S')}.tsv"
+            fname = asksaveasfilename(initialdir=os.path.dirname(fname), initialfile=os.path.basename(fname))
+        if not fname:
+            return "break"
+        print(fname)
         if fname == self.img.fname:
             raise Exception(f"text output {fname} should not be the same as input image {self.img.fname}")
+        #if fname[-3:] == '.tsv':
+        #    raise Exception(f"text output {fname} must be a tsv")
+
         data = [p.todict() for p in self.point_locs.values()]
         with open(fname, 'w') as f:
             # provenance
@@ -328,6 +337,7 @@ class App(tk.Frame):
             f.write("\t".join(data[0].keys()) + "\n")
             for row in data:
                 f.write("\t".join(["%s"%x for x in row.values()]) + "\n")
+        return "break"
 
     def save_db(self):
         i = self.point_idx.get()
