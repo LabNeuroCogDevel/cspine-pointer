@@ -7,10 +7,30 @@ import cv2
 import colorsys
 import datetime
 import os
+import re
+import sqlite3
+from typing import Optional, Dict
 
-LABELS_DICT = {"C4": ["up","ua", "lp","m","a"],
-          "C3": ["up","ua", "lp","m","a"],
-          "C2": ["p", "m", "a"]}
+LABELS_DICT = {
+          "C2": ["p", "m", "a"],
+          "C3": ["up","ua", "lp","m","la"],
+          "C4": ["up","ua", "lp","m","la"]
+}
+LABELS_GUIDE = {
+'C2p':(84,414),
+'C2m':(174,378),
+'C2a':(264,414),
+'C3up':(90,456),
+'C3ua':(266,458),
+'C3lp':(88,576),
+'C3m':(150,562),
+'C3la':(228,594),
+'C4up':(66,626),
+'C4ua':(214,636),
+'C4lp':(50,756),
+'C4m':(124,732),
+'C4la':(198,760)
+}
 
 LABELS = [k+x for k in LABELS_DICT.keys() for x in LABELS_DICT[k]]
 
@@ -20,13 +40,16 @@ def set_color(clabel: str) -> str:
     base_color =  colors.get(clabel[0:2], (255,255,0))
     pos = clabel[2:]
     try:
-        sat = ["up","ua","lp","p", "m","a"].index(pos)/6 * 255
+        sat = (["up","ua","lp","p", "m","la", "a"].index(pos)+1)/8 * 255
     except ValueError:
         sat = 256/2
 
     h, s, l = colorsys.rgb_to_hls(*base_color)
-    rgb = colorsys.rgb_to_hls(h, sat, l)
-    return "#" + "".join(["%02x"%int(x) for x in rgb])
+    rgb = colorsys.hls_to_rgb(h, sat, l)
+    rgb_san = [int(abs(min(x,255))) for x in rgb]
+    ashex = "#" + "".join(["%02x"%x for x in rgb_san])
+    #print(f"# {base_color} to {h}, {s}=>{sat}, {l}; {rgb_san} is now {ashex}")
+    return ashex
 
 LABEL_COLOR = {k: set_color(k) for k in LABELS}
 
@@ -37,12 +60,18 @@ class CSpinePoint:
         self.color = LABEL_COLOR.get(label, "#ffffff")
         self.x = None
         self.y = None
+        self.z = None
         self.timestamp = None
         self.user = user or os.environ.get("USER")
-    def update(self, x, y):
+    def update(self, x, y, z):
         self.x = x
         self.y = y
+        self.z = z
         self.timestamp = datetime.datetime.now()
+
+    def todict(self) -> dict:
+        return {'x': self.x, 'y': self.y, 'z': self.z, 'timestamp': self.timestamp,
+                'user': self.user}
 
 class StructImg:
     def __init__(self, fname):
@@ -103,11 +132,12 @@ class App(tk.Frame):
         self.master = master
         self.master.title("CSpine Placement")
 
-        self.point_locs = {l: CSpinePoint(l) for l in LABELS}
+        self.point_locs : Dict[str, CSpinePoint] = {l: CSpinePoint(l) for l in LABELS}
 
         # protect from garbage collection
         self.slice_cor = None
         self.slice_sag = None
+        self.guide_img = ImageTk.PhotoImage(file="./guide-image-small.png")
         # need to pack root before anything else will show
         self.pack()
 
@@ -120,70 +150,84 @@ class App(tk.Frame):
         self.zoom = tk.Canvas(self,width=zoom_data.width(), height=zoom_data.height(), background="red")
         self.c_cor= tk.Canvas(self, width=sag.width(), height=sag.height(), background="black")
         self.c_sag= tk.Canvas(self, width=cor.width(), height=cor.height(), background="black")
+        self.c_guide =tk.Canvas(self, width=self.guide_img.width(), height=self.guide_img.height(), background="black")
 
         # Bind the mouse click event
         self.zoom.bind("<Button-1>", self.place_point)
+        # right click to go back
+        self.zoom.bind("<Button-3>", lambda _: self.next_label(-1))
 
         self.c_cor.bind("<Button-1>", self.place_line)
         self.c_sag.bind("<Button-1>", self.place_line)
 
+        self.c_guide.pack(side=tk.LEFT)
         self.c_cor.pack(side=tk.LEFT)
         self.c_sag.pack(side=tk.LEFT)
         self.zoom.pack(side=tk.LEFT)
 
         self.point_idx = tk.IntVar(self)
         self.point_labels = tk.Listbox(self)
-        self.point_labels.bind(
-            "<<ListboxSelect>>", lambda e: self.point_idx.set(e.widget.curselection()[0])
-        )
+        self.point_labels.bind("<<ListboxSelect>>", self.label_select_change)
 
+        ## initialize labels
         # TODO: read from db or file
         for i,_ in enumerate(LABELS):
              self.update_label(i)
+        self.point_labels.selection_set(0)
+
 
         self.point_labels.pack(side=tk.TOP, expand=1)
 
-        #self.up = tk.Button(text="up")
-        #self.down = tk.Button(text="down")
-        #self.up.bind("<Button-1>", lambda x: self.move(1))
-        #self.down.bind("<Button-1>", lambda x: self.move(-1))
-        #self.up.pack()
-        #self.down.pack(side=tk.LEFT)
+        self.save_btn = tk.Button(text="save")
+        self.save_btn.bind("<Button-1>", lambda _: self.save_full())
+        self.save_btn.pack(side=tk.BOTTOM)
 
         self.draw_images()
 
+        self.db_fname = 'cspine.db'
+
+    def label_select_change(self, e):
+        self.point_idx.set(e.widget.curselection()[0])
+        self.redraw_guide()
 
     def update_label(self, i=None):
-        "set current roi label to include box position"
+        """set given or current listbox item display
+        expect to be called after a point placement click
+        or during box
+        will update text to label: x,y and background color
+        """
         lb = self.point_labels
-        if not i:
-            # listbox curselection is (index, None)
-            i = lb.curselection()
-            i = i[0]
-            print("DEBUG: tracked {self.point_idx.get()} vs selected {i}")
+        if i is None:
+            i = self.point_idx.get()
+            #i = lb.curselection()
+            #i = i[0] # listbox curselection is (index, None)
 
         # update might happen before listbox has any selection
-        if not i:
+        if i is None:
             print(f"WARN: update update_label but no i!")
             return
         label = LABELS[i]
-        point = self.point_labels[label]
+        point = self.point_locs[label]
         title = f"{label}: {point.x} {point.y}" #self.point_labels[i].label()
 
         # no way to change label? rm and add back
         # color is cleared with delete, need to restore
-        lb.delete(i)
+        if lb.size() >= i:
+            lb.delete(i)
         lb.insert(i, title)
         lb.itemconfig(i, {"bg": point.color})
 
     def next_label(self, step=1):
-        ""
+        """move the current list box selection with a wrap around.
+        cange current selection so it is not colored
+        """
         n = self.point_labels.size()
         next_label = (self.point_idx.get() + step) % n
         self.point_idx.set(next_label)
         self.point_labels.selection_clear(0, n)
         self.point_labels.selection_set(next_label)
         self.point_labels.see(next_label)
+        self.redraw_guide()
 
 
     def move(self, change):
@@ -200,12 +244,13 @@ class App(tk.Frame):
 
         label = LABELS[self.point_idx.get()]
         point = self.point_locs[label]
-        point.update(real_x, real_y)
+        point.update(real_x, real_y, self.img.idx_sag)
 
         c.create_oval(x-2, y-2, x+2, y+2, fill=point.color)
         self.c_sag.create_oval(real_x-1,real_y-1,real_x+1,real_y+1,fill=point.color)
         self.c_cor.create_oval(self.img.idx_sag-1,real_y-1,  self.img.idx_sag+1,real_y+1,   fill="red")
         self.update_label()
+        self.save_db()
         self.next_label()
 
     def place_line(self, event):
@@ -217,6 +262,20 @@ class App(tk.Frame):
         else:
             self.img.idx_cor = x
         self.draw_images()
+
+    def redraw_guide(self):
+        i = self.point_idx.get()
+        if i is None:
+            return
+        self.c_guide.delete("ALL")
+        self.c_guide.create_image(self.guide_img.width(), self.guide_img.height(), anchor="se", image=self.guide_img)
+
+        label = LABELS[i]
+        point = self.point_locs[LABELS[i]]
+        (x,y) = LABELS_GUIDE[label]
+        x=x//2;
+        y=y//2;
+        self.c_guide.create_oval(x-5, y-5, x+5, y+5, fill=point.color)
 
     def draw_images(self,*kargs):
         """redraw all images"""
@@ -241,6 +300,45 @@ class App(tk.Frame):
         self.c_cor.create_line(self.img.idx_sag, 300, self.img.idx_sag, 30, fill="green")
 
 
+        self.redraw_guide()
+
+
+    def save_full(self, fname:Optional[str] = None):
+        """
+        save all points to a tab delimited text file with header and comment
+        """
+        if fname is None:
+            fname = re.sub('.nii(.gz)$', '', self.img.fname) +\
+                f"_cspine-{os.environ['USER']}_create-{datetime.datetime.now().strftime('%FT%H%M%S')}.tsv"
+        if fname == self.img.fname:
+            raise Exception(f"text output {fname} should not be the same as input image {self.img.fname}")
+        data = [p.todict() for p in self.point_locs.values()]
+        with open(fname, 'w') as f:
+            # provenance
+            f.write("# ")
+            f.write(f"timestamp={datetime.datetime.now()}; ")
+            f.write(f"input={self.img.fname}; ")
+            f.write(f"user={os.environ.get('USER')}; ")
+            f.write(f"sag={self.img.idx_sag}; cor={self.img.idx_cor};")
+            f.write(f"crop={self.img.crop_size}; zoom={self.img.zoom_fac};\n")
+            # data -- could use pandas but seems like over kill
+            # keys and values should always be in the same order
+            f.write("\t".join(data[0].keys()) + "\n")
+            for row in data:
+                f.write("\t".join(["%s"%x for x in row.values()]) + "\n")
+
+    def save_db(self):
+        i = self.point_idx.get()
+        point = self.point_locs[LABELS[i]]
+        with sqlite3.connect(self.db_fname) as conn:
+            sql = ''' INSERT INTO point(image,user,label,created,x,y,z)
+                        VALUES(?,?,?,?,?,?,?)'''
+            cur = conn.cursor()
+            cur.execute(sql, (self.img.fname, point.user,point.label,point.timestamp,point.x,point.y,point.z))
+            conn.commit()
+            return cur.lastrowid
+
+
 if __name__ == "__main__":
     import sys
     fname = sys.argv[1]
@@ -248,10 +346,3 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = App(master=root,fname=fname)
     app.mainloop()
-
-    #img = StructImg(fname)
-    #sag = img.sag()
-    #sag_c= tk.Canvas(root, width=sag.width(), height=sag.height(), background="black")
-    #sag_c.pack()
-    #sag_c.create_image(sag.width(), sag.height(), anchor="se", image=sag)
-    #root.mainloop()

@@ -1,0 +1,9 @@
+create table point (
+ image text,
+ user text,
+ label text,
+ created timestamp,
+ x int,
+ y int,
+ z int
+);
