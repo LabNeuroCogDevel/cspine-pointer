@@ -70,7 +70,8 @@ class CSpinePoint:
         self.timestamp = datetime.datetime.now()
 
     def todict(self) -> dict:
-        return {'x': self.x, 'y': self.y, 'z': self.z, 'timestamp': self.timestamp,
+        return {'label': self.label,
+                'x': self.x, 'y': self.y, 'sag_i': self.z, 'timestamp': self.timestamp,
                 'user': self.user}
 
 class StructImg:
@@ -208,7 +209,7 @@ class App(tk.Frame):
             return
         label = LABELS[i]
         point = self.point_locs[label]
-        title = f"{label}: {point.x} {point.y}" #self.point_labels[i].label()
+        title = f"{label}: {point.x} {point.y} {point.z}"
 
         # no way to change label? rm and add back
         # color is cleared with delete, need to restore
