@@ -4,7 +4,45 @@ import numpy as np
 import nibabel as nib
 from PIL import Image, ImageTk
 import cv2
+import colorsys
+import datetime
+import os
 
+LABELS_DICT = {"C4": ["up","ua", "lp","m","a"],
+          "C3": ["up","ua", "lp","m","a"],
+          "C2": ["p", "m", "a"]}
+
+LABELS = [k+x for k in LABELS_DICT.keys() for x in LABELS_DICT[k]]
+
+
+def set_color(clabel: str) -> str:
+    colors = {'C4': (255,0,0), 'C3': (0,255,0), 'C2': (0,0,255)}
+    base_color =  colors.get(clabel[0:2], (255,255,0))
+    pos = clabel[2:]
+    try:
+        sat = ["up","ua","lp","p", "m","a"].index(pos)/6 * 255
+    except ValueError:
+        sat = 256/2
+
+    h, s, l = colorsys.rgb_to_hls(*base_color)
+    rgb = colorsys.rgb_to_hls(h, sat, l)
+    return "#" + "".join(["%02x"%int(x) for x in rgb])
+
+LABEL_COLOR = {k: set_color(k) for k in LABELS}
+
+
+class CSpinePoint:
+    def __init__(self, label, user=None):
+        self.label = label
+        self.color = LABEL_COLOR.get(label, "#ffffff")
+        self.x = None
+        self.y = None
+        self.timestamp = None
+        self.user = user or os.environ.get("USER")
+    def update(self, x, y):
+        self.x = x
+        self.y = y
+        self.timestamp = datetime.datetime.now()
 
 class StructImg:
     def __init__(self, fname):
@@ -26,7 +64,7 @@ class StructImg:
         maximum = self.max_val
         # rescale so high valued niftis aren't too bright
         x = np.round((x - minimum) / (maximum - minimum) * 255)
-        print(f"rescaling {minimum} to {maximum}. now {np.mean(x)}")
+        #print(f"rescaling {minimum} to {maximum}. now {np.mean(x)}")
         return ImageTk.PhotoImage(image=Image.fromarray(x))
 
     def sag_scroll(self, change=1):
@@ -64,6 +102,9 @@ class App(tk.Frame):
         super().__init__(master)
         self.master = master
         self.master.title("CSpine Placement")
+
+        self.point_locs = {l: CSpinePoint(l) for l in LABELS}
+
         # protect from garbage collection
         self.slice_cor = None
         self.slice_sag = None
@@ -71,11 +112,6 @@ class App(tk.Frame):
         self.pack()
 
         self.img = StructImg(fname)
-
-        self.up = tk.Button(text="up")
-        self.down = tk.Button(text="down")
-        self.up.bind("<Button-1>", lambda x: self.move(1))
-        self.down.bind("<Button-1>", lambda x: self.move(-1))
 
         cor = self.img.slice_sag()
         sag = self.img.slice_cor()
@@ -94,10 +130,60 @@ class App(tk.Frame):
         self.c_cor.pack(side=tk.LEFT)
         self.c_sag.pack(side=tk.LEFT)
         self.zoom.pack(side=tk.LEFT)
-        self.up.pack()
-        self.down.pack(side=tk.LEFT)
+
+        self.point_idx = tk.IntVar(self)
+        self.point_labels = tk.Listbox(self)
+        self.point_labels.bind(
+            "<<ListboxSelect>>", lambda e: self.point_idx.set(e.widget.curselection()[0])
+        )
+
+        # TODO: read from db or file
+        for i,_ in enumerate(LABELS):
+             self.update_label(i)
+
+        self.point_labels.pack(side=tk.TOP, expand=1)
+
+        #self.up = tk.Button(text="up")
+        #self.down = tk.Button(text="down")
+        #self.up.bind("<Button-1>", lambda x: self.move(1))
+        #self.down.bind("<Button-1>", lambda x: self.move(-1))
+        #self.up.pack()
+        #self.down.pack(side=tk.LEFT)
 
         self.draw_images()
+
+
+    def update_label(self, i=None):
+        "set current roi label to include box position"
+        lb = self.point_labels
+        if not i:
+            # listbox curselection is (index, None)
+            i = lb.curselection()
+            i = i[0]
+            print("DEBUG: tracked {self.point_idx.get()} vs selected {i}")
+
+        # update might happen before listbox has any selection
+        if not i:
+            print(f"WARN: update update_label but no i!")
+            return
+        label = LABELS[i]
+        point = self.point_labels[label]
+        title = f"{label}: {point.x} {point.y}" #self.point_labels[i].label()
+
+        # no way to change label? rm and add back
+        # color is cleared with delete, need to restore
+        lb.delete(i)
+        lb.insert(i, title)
+        lb.itemconfig(i, {"bg": point.color})
+
+    def next_label(self, step=1):
+        ""
+        n = self.point_labels.size()
+        next_label = (self.point_idx.get() + step) % n
+        self.point_idx.set(next_label)
+        self.point_labels.selection_clear(0, n)
+        self.point_labels.selection_set(next_label)
+        self.point_labels.see(next_label)
 
 
     def move(self, change):
@@ -107,16 +193,20 @@ class App(tk.Frame):
 
     def place_point(self, event):
         x, y, c = event.x, event.y, event.widget
-        c.create_oval(x-2, y-2, x+2, y+2, fill="red")
         real_x = x//self.img.zoom_fac + self.img.zoom_left
         # 256 - (255-56)//3
         real_y = self.img.pixdim[2] -  (self.img.crop_size[1] - y)//self.img.zoom_fac
         #import ipdb;ipdb.set_trace()
 
+        label = LABELS[self.point_idx.get()]
+        point = self.point_locs[label]
+        point.update(real_x, real_y)
 
-        self.c_sag.create_oval(real_x-1,real_y-1,real_x+1,real_y+1,fill="red")
-
+        c.create_oval(x-2, y-2, x+2, y+2, fill=point.color)
+        self.c_sag.create_oval(real_x-1,real_y-1,real_x+1,real_y+1,fill=point.color)
         self.c_cor.create_oval(self.img.idx_sag-1,real_y-1,  self.img.idx_sag+1,real_y+1,   fill="red")
+        self.update_label()
+        self.next_label()
 
     def place_line(self, event):
         x, y, canvas = event.x, event.y, event.widget
