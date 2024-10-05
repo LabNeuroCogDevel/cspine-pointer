@@ -9,6 +9,7 @@ import datetime
 import os
 import re
 import sqlite3
+import os.path
 from typing import Optional, Dict
 
 LABELS_DICT = {
@@ -76,7 +77,7 @@ class CSpinePoint:
 
 class StructImg:
     def __init__(self, fname):
-        self.fname = fname
+        self.fname =  os.path.abspath(fname)
         self.data = nib.load(fname).dataobj
         self.pixdim = self.data.shape
         self.idx_cor = self.pixdim[2]//2
@@ -185,7 +186,7 @@ class App(tk.Frame):
 
         self.draw_images()
 
-        self.db_fname = 'cspine.db'
+        self.db_fname = os.path.abspath(os.path.dirname(__file__)) + '/cspine.db'
 
     def label_select_change(self, e):
         self.point_idx.set(e.widget.curselection()[0])
@@ -342,8 +343,11 @@ class App(tk.Frame):
 
 if __name__ == "__main__":
     import sys
+    if len(sys.argv) != 2:
+        print(f"USAGE: {sys.argv[0]} cspine_image.nii.gz")
+        sys.exit(1)
+
     fname = sys.argv[1]
-    print(fname)
     root = tk.Tk()
     app = App(master=root,fname=fname)
     app.mainloop()
