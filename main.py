@@ -140,7 +140,7 @@ class App(tk.Frame):
         # protect from garbage collection
         self.slice_cor = None
         self.slice_sag = None
-        self.guide_img = ImageTk.PhotoImage(file="./guide-image-small.png")
+        self.guide_img = ImageTk.PhotoImage(file=os.path.dirname(__file__) + "/guide-image-small.png")
         # need to pack root before anything else will show
         self.pack()
 
