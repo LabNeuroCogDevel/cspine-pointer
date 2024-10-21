@@ -5,5 +5,7 @@ create table point (
  created timestamp,
  x int,
  y int,
- z int
+ z int,
+ rating int,
+ note text
 );

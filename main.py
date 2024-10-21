@@ -12,6 +12,7 @@ import sqlite3
 import os.path
 from typing import Optional, Dict
 from tkinter.filedialog import asksaveasfilename
+from tkinter import ttk
 
 LABELS_DICT = {
           "C2": ["p", "m", "a"],
@@ -64,16 +65,22 @@ class CSpinePoint:
         self.y = None
         self.z = None
         self.timestamp = None
+        self.rating = "NA"
+        self.note = ""
         self.user = user or os.environ.get("USER")
+
     def update(self, x, y, z):
+        """update position and change timestamp"""
         self.x = x
         self.y = y
         self.z = z
         self.timestamp = datetime.datetime.now()
 
     def todict(self) -> dict:
+        """ convert object to dict for easier seralization """
         return {'label': self.label,
                 'x': self.x, 'y': self.y, 'sag_i': self.z, 'timestamp': self.timestamp,
+                'rating': self.rating, 'note': self.note, 
                 'user': self.user}
 
 class StructImg:
@@ -157,8 +164,9 @@ class App(tk.Frame):
 
         # Bind the mouse click event
         self.zoom.bind("<Button-1>", self.place_point)
-        # right click to go back
-        self.zoom.bind("<Button-3>", lambda _: self.next_label(-1))
+        # right click to go forward, middle click to go back
+        self.zoom.bind("<Button-3>", lambda _: self.next_label(1))
+        self.zoom.bind("<Button-2>", lambda _: self.next_label(-1))
 
         self.c_cor.bind("<Button-1>", self.place_line)
         self.c_sag.bind("<Button-1>", self.place_line)
@@ -175,7 +183,7 @@ class App(tk.Frame):
         ## initialize labels
         # TODO: read from db or file
         for i,_ in enumerate(LABELS):
-             self.update_label(i)
+            self.update_label(i)
         self.point_labels.selection_set(0)
 
 
@@ -185,13 +193,65 @@ class App(tk.Frame):
         self.save_btn.bind("<Button-1>", lambda _: self.save_full())
         self.save_btn.pack(side=tk.BOTTOM)
 
+        rate_options = [str(x) if x!=0 else "NA" for x in range(5)]
+        self.combo = ttk.Combobox(self, values=rate_options, width=2)
+        self.combo.set("NA")
+        self.combo.bind("<<ComboboxSelected>>", self.update_rate)
+        self.combo.pack(side=tk.RIGHT)
+        self.note_text = tk.StringVar()
+        self.note = ttk.Entry(self, textvariable=self.note_text)
+        self.note_text.trace("w", self.update_note)
+        self.note.pack(side=tk.RIGHT)
+
         self.draw_images()
 
         self.db_fname = os.path.abspath(os.path.dirname(__file__)) + '/cspine.db'
 
     def label_select_change(self, e):
-        self.point_idx.set(e.widget.curselection()[0])
+        "list box cspine point label change"
+        selected = e.widget.curselection()
+        if not selected:
+            print("WARN: no selection")
+            return
+        self.point_idx.set(selected[0])
         self.redraw_guide()
+        self.match_rating()
+
+    def current_point(self) -> Optional[CSpinePoint]:
+        "find the current point"
+        i = self.point_idx.get()
+        if i is None:
+            return None
+        label = LABELS[i]
+        point = self.point_locs[label]
+        return point
+
+
+    def match_rating(self):
+        "after changing to set a label, update raiting and note display"
+        point = self.current_point()
+        if point is None:
+            return
+        self.combo.set(point.rating)
+        self.note_text.set(point.note)
+
+    def update_rate(self, e):
+        "update rating annotation for selected point. expect to be run from button push"
+        rating = e.widget.get()
+        point = self.current_point()
+        i = self.point_idx.get()
+        label = LABELS[i]
+        point = self.point_locs[label]
+        point.rating = rating
+        self.update_label(i)
+
+    def update_note(self, *args):
+        "watching note changes and adding them to point"
+        point = self.current_point()
+        if not point:
+            return
+        point.note = self.note_text.get()
+
 
     def update_label(self, i=None):
         """set given or current listbox item display
@@ -207,11 +267,11 @@ class App(tk.Frame):
 
         # update might happen before listbox has any selection
         if i is None:
-            print(f"WARN: update update_label but no i!")
+            print("WARN: update update_label but no i!")
             return
         label = LABELS[i]
         point = self.point_locs[label]
-        title = f"{label}: {point.x} {point.y} {point.z}"
+        title = f"{label}: {point.x} {point.y} {point.z} ({point.rating})"
 
         # no way to change label? rm and add back
         # color is cleared with delete, need to restore
@@ -222,7 +282,7 @@ class App(tk.Frame):
 
     def next_label(self, step=1):
         """move the current list box selection with a wrap around.
-        cange current selection so it is not colored
+        change current selection so it is not colored
         """
         n = self.point_labels.size()
         next_label = (self.point_idx.get() + step) % n
@@ -230,22 +290,52 @@ class App(tk.Frame):
         self.point_labels.selection_clear(0, n)
         self.point_labels.selection_set(next_label)
         self.point_labels.see(next_label)
+
+        # change rating
+        #point = self.point_locs[LABELS[next_label]]
+        #self.combo.set(point.rating)
+        self.match_rating()
+        # todo: set note
         self.redraw_guide()
+        # redraw all the points incaes we are going back to an already defined one
+        self.draw_images()
 
 
     def move(self, change):
         self.img.idx_sag += change
         self.draw_images()
 
+    def redraw_point(self, i):
+        "using stored 'real' x,y to redraw cspine label locations."
+        label = LABELS[i]
+        point = self.point_locs[label]
+        if not point.x or not point.y:
+            return
+
+        real_x = point.x
+        real_y = point.y
+        x = (real_x - self.img.zoom_left)*self.img.zoom_fac
+        y = (real_y - self.img.pixdim[2])*self.img.zoom_fac + self.img.crop_size[1]
+
+        self.zoom.create_oval(x-2, y-2, x+2, y+2, fill=point.color)
+        self.c_sag.create_oval(real_x-1,real_y-1,real_x+1,real_y+1,fill=point.color)
+        self.c_cor.create_oval(self.img.idx_sag-1, real_y-1,
+                               self.img.idx_sag+1, real_y+1,
+                               fill="red")
+
 
     def place_point(self, event):
+        """
+        place colored circle on spine when image is clicked
+        """
         x, y, c = event.x, event.y, event.widget
         real_x = x//self.img.zoom_fac + self.img.zoom_left
         # 256 - (255-56)//3
         real_y = self.img.pixdim[2] -  (self.img.crop_size[1] - y)//self.img.zoom_fac
         #import ipdb;ipdb.set_trace()
 
-        label = LABELS[self.point_idx.get()]
+        i = self.point_idx.get()
+        label = LABELS[i]
         point = self.point_locs[label]
         point.update(real_x, real_y, self.img.idx_sag)
 
@@ -254,7 +344,11 @@ class App(tk.Frame):
         self.c_cor.create_oval(self.img.idx_sag-1,real_y-1,  self.img.idx_sag+1,real_y+1,   fill="red")
         self.update_label()
         self.save_db()
-        self.next_label()
+        # 20241021: don't auto advance. might have note or score
+        #   need to redraw if second click though
+        #self.next_label()
+        self.redraw_zoom_window()
+
 
     def place_line(self, event):
         x, y, canvas = event.x, event.y, event.widget
@@ -267,6 +361,7 @@ class App(tk.Frame):
         self.draw_images()
 
     def redraw_guide(self):
+        "Update the far left guide image to highlight the current point being added"
         i = self.point_idx.get()
         if i is None:
             return
@@ -296,14 +391,25 @@ class App(tk.Frame):
         self.c_sag.create_image(self.slice_sag.width(), self.slice_sag.height(), anchor="se", image=self.slice_sag)
         #import ipdb;ipdb.set_trace()
 
+        self.redraw_zoom_window()
+
+        self.redraw_guide()
+
+
+    def redraw_zoom_window(self):
+        """overwrite the zoomed area and redraw any placed points.
+        need clear whats already been placed to replace.
+        for performance, could track circles to delete them instead of redrawing?"""
+
         self.zoom.delete("ALL")
         self.zoom.create_image(self.zoom_img.width(), self.zoom_img.height(), anchor="se", image=self.zoom_img)
 
         self.c_sag.create_line(self.img.idx_cor, 300, self.img.idx_cor, 30, fill="green")
         self.c_cor.create_line(self.img.idx_sag, 300, self.img.idx_sag, 30, fill="green")
 
-
-        self.redraw_guide()
+        # replace all points
+        for i in range(len(LABELS)):
+            self.redraw_point(i)
 
 
     def save_full(self, fname:Optional[str] = None):
@@ -343,10 +449,12 @@ class App(tk.Frame):
         i = self.point_idx.get()
         point = self.point_locs[LABELS[i]]
         with sqlite3.connect(self.db_fname) as conn:
-            sql = ''' INSERT INTO point(image,user,label,created,x,y,z)
-                        VALUES(?,?,?,?,?,?,?)'''
+            sql = ''' INSERT INTO point(image,user,label,created,x,y,z,rating,note)
+                        VALUES(?,?,?,?,?,?,?,?,?)'''
             cur = conn.cursor()
-            cur.execute(sql, (self.img.fname, point.user,point.label,point.timestamp,point.x,point.y,point.z))
+            cur.execute(sql, (self.img.fname,
+                              point.user,point.label,point.timestamp,point.x,point.y,point.z,
+                              point.rating, point.note))
             conn.commit()
             return cur.lastrowid
 
