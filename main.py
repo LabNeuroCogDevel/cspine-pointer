@@ -155,6 +155,10 @@ class App(tk.Frame):
         # need to pack root before anything else will show
         self.pack()
 
+        self.user_text = tk.StringVar()
+        self.user_text.set(os.environ.get("USER") or "")
+        self.user = ttk.Entry(self, textvariable=self.user_text)
+        self.user.pack(side=tk.TOP)
         self.img = StructImg(fname)
 
         cor = self.img.slice_sag()
@@ -342,6 +346,10 @@ class App(tk.Frame):
         label = LABELS[i]
         point = self.point_locs[label]
         point.update(real_x, real_y, self.img.idx_sag)
+        # when user is not empty
+        if this_user := self.user_text.get():
+            point.user = this_user
+            logging.debug("updated user of point: %s",point)
 
         c.create_oval(x-2, y-2, x+2, y+2, fill=point.color)
         self.c_sag.create_oval(real_x-1,real_y-1,real_x+1,real_y+1,fill=point.color)
