@@ -50,6 +50,7 @@ def set_color(clabel: str) -> str:
         sat = 256/2
 
     h, s, l = colorsys.rgb_to_hls(*base_color)
+    #new_l = min(l+0.5,1) # make everything brighter
     rgb = colorsys.hls_to_rgb(h, sat, l)
     rgb_san = [int(abs(min(x,255))) for x in rgb]
     ashex = "#" + "".join(["%02x"%x for x in rgb_san])
@@ -378,7 +379,8 @@ class App(tk.Frame):
         x = (real_x - self.img.zoom_left)*self.img.zoom_fac
         y = (real_y - self.img.pixdim[2])*self.img.zoom_fac + self.img.crop_size[1]
 
-        self.zoom.create_oval(x-2, y-2, x+2, y+2, fill=point.color)
+        r = 10//2
+        self.zoom.create_oval(x-r, y-r, x+r, y+r, fill=point.color, outline='white')
         self.c_sag.create_oval(real_x-1,real_y-1,real_x+1,real_y+1,fill=point.color)
         self.c_cor.create_oval(self.img.idx_sag-1, real_y-1,
                                self.img.idx_sag+1, real_y+1,
