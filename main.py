@@ -138,12 +138,62 @@ class StructImg:
         res = cv2.resize(this_slice, self.crop_size, interpolation=cv2.INTER_NEAREST)
         return self.npimg(res)
 
+class FileLister(tk.Frame):
+    def __init__(self, master, mainwindow, fnames):
+        super().__init__(master)
+        self.main = mainwindow
+        self.master = master
+        self.master.title("Spine Image List")
+        self.master.geometry("750x250")
+        self.fnames = fnames
+        self.file_list = tk.Listbox(self)
+        self.file_list.bind("<<ListboxSelect>>", self.update_file)
+        for i,fname in enumerate(fnames):
+            self.file_list.insert(i, fname)
+            #lb.itemconfig(i, {"bg": point.color})
+        self.pack()
+        self.file_list.pack(fill=tk.BOTH, expand=True)
+        self.file_list.bind("<Configure>", lambda e: self.file_list.configure(width=e.width, height=e.height))
+
+    def update_file(self, e):
+        """
+        change file
+        """
+        selected = e.widget.curselection()
+        if not selected:
+            print("WARN: no file selection")
+            return
+        idx = selected[0]
+        logging.debug("file selected %s", idx)
+        self.main.load_image(self.fnames[idx])
+
+
+
 class App(tk.Frame):
-    def __init__(self, master, fname):
+    def load_image(self, fname):
+        """
+        load new image.
+        TODO: will break if image dims change?
+        """
+        self.img = StructImg(fname)
+
+        self.reset_points()
+        for i,_ in enumerate(LABELS):
+            self.update_label(i)
+        self.point_labels.selection_set(0)
+
+        self.draw_images()
+        pass
+
+    def reset_points(self):
+        self.point_locs = {l: CSpinePoint(l) for l in LABELS}
+
     def __init__(self, master, savedir, fnames):
         super().__init__(master)
         self.master = master
         self.master.title("CSpine Placement")
+        self.file_window = FileLister(tk.Tk(), self, fnames)
+
         self.savedir : Optional[os.PathLike]  = savedir
 
         self.point_locs : Dict[str, CSpinePoint] = {l: CSpinePoint(l) for l in LABELS}
@@ -159,6 +209,9 @@ class App(tk.Frame):
         self.user_text.set(os.environ.get("USER") or "")
         self.user = ttk.Entry(self, textvariable=self.user_text)
         self.user.pack(side=tk.TOP)
+
+        self.fnames = fnames
+        fname = fnames[0]
         self.img = StructImg(fname)
 
         cor = self.img.slice_sag()
