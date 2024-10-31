@@ -13,6 +13,8 @@ import os.path
 from typing import Optional, Dict
 from tkinter.filedialog import asksaveasfilename
 from tkinter import ttk
+import logging
+logging.basicConfig(level=os.environ.get("LOGLEVEL", logging.INFO))
 
 LABELS_DICT = {
           "C2": ["p", "m", "a"],
@@ -138,9 +140,11 @@ class StructImg:
 
 class App(tk.Frame):
     def __init__(self, master, fname):
+    def __init__(self, master, savedir, fnames):
         super().__init__(master)
         self.master = master
         self.master.title("CSpine Placement")
+        self.savedir : Optional[os.PathLike]  = savedir
 
         self.point_locs : Dict[str, CSpinePoint] = {l: CSpinePoint(l) for l in LABELS}
 
@@ -420,7 +424,7 @@ class App(tk.Frame):
         if fname is None:
             fname = re.sub('.nii(.gz)$', '', self.img.fname) +\
                 f"_cspine-{os.environ['USER']}_create-{datetime.datetime.now().strftime('%FT%H%M%S')}.tsv"
-            fname = asksaveasfilename(initialdir=os.path.dirname(fname), initialfile=os.path.basename(fname))
+            fname = asksaveasfilename(initialdir=self.savedir or os.path.dirname(fname), initialfile=os.path.basename(fname))
         if not fname:
             return "break"
         print(fname)
@@ -461,11 +465,17 @@ class App(tk.Frame):
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) != 2:
-        print(f"USAGE: {sys.argv[0]} cspine_image.nii.gz")
+    if len(sys.argv) < 2:
+        print(f"USAGE: {sys.argv[0]} cspine_image.nii.gz cspine_image2.nii.gz")
         sys.exit(1)
+    import argparse
+    parser = argparse.ArgumentParser(description='mainually identify cspine points across many files')
+    parser.add_argument('--output_dir', type=str, help='Directory to save files', default=None)
+    parser.add_argument('fnames', nargs='+', help='nifti image file names (TODO: read in dicom dir)')
 
-    fname = sys.argv[1]
+    args = parser.parse_args()
+    logging.debug(args)
+
     root = tk.Tk()
-    app = App(master=root,fname=fname)
+    app = App(master=root,savedir=args.output_dir, fnames=args.fnames)
     app.mainloop()
