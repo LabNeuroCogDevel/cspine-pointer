@@ -40,6 +40,25 @@ LABELS_GUIDE = {
 LABELS = [k+x for k in LABELS_DICT.keys() for x in LABELS_DICT[k]]
 
 
+def fetch_full_db(db_fname: os.PathLike) -> list[dict[str,str]]:
+    """
+    >>> res = fetch_full_db("./cspine.db")
+    >>> len(res) > 100
+    True
+    >>> res[0]['x'] > 0
+    True
+    >>> os.path.isfile(res[0]['image'])
+    True
+    """
+    all_points_sql="""select * from point"""
+    with sqlite3.connect(db_fname) as conn:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(all_points_sql)
+        res = cur.fetchall()
+    return res
+
+
 def set_color(clabel: str) -> str:
     colors = {'C4': (255,0,0), 'C3': (0,255,0), 'C2': (0,0,255)}
     base_color =  colors.get(clabel[0:2], (255,255,0))
@@ -156,6 +175,11 @@ class FileLister(tk.Frame):
         self.file_list.pack(fill=tk.BOTH, expand=True)
         self.file_list.bind("<Configure>", lambda e: self.file_list.configure(width=e.width, height=e.height))
 
+        self.recolorbtn = ttk.Button(self, text="recolor")
+        self.recolorbtn.bind("<Button-1>", self.color_files)
+        self.recolorbtn.pack(side=tk.BOTTOM)
+
+
     def update_file(self, e):
         """
         change file
@@ -173,6 +197,13 @@ class FileLister(tk.Frame):
 
         self.main.load_image(self.fnames[idx])
 
+    def color_files(self, e):
+        db_fname = os.path.dirname(__file__) + "/cspine.db"
+        db = fetch_full_db(db_fname)
+        all_files = [x['image'] for x in db]
+        for i, fname in enumerate(self.file_list.get(0,tk.END)):
+            if fname in all_files:
+                self.file_list.itemconfig(i, {"bg": "gray"})
 
 
 class App(tk.Frame):
@@ -256,7 +287,7 @@ class App(tk.Frame):
 
         self.point_labels.pack(side=tk.TOP, expand=1)
 
-        self.save_btn = tk.Button(text="save")
+        self.save_btn = ttk.Button(text="save")
         self.save_btn.bind("<Button-1>", lambda _: self.save_full())
         self.save_btn.pack(side=tk.BOTTOM)
 
