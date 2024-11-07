@@ -166,6 +166,11 @@ class FileLister(tk.Frame):
             return
         idx = selected[0]
         logging.debug("file selected %s", idx)
+
+        # color selected
+        lb = self.file_list
+        lb.itemconfig(idx, {"bg": "blue"})
+
         self.main.load_image(self.fnames[idx])
 
 
