@@ -172,21 +172,26 @@ class FileLister(tk.Frame):
             self.file_list.insert(i, fname)
             #lb.itemconfig(i, {"bg": point.color})
         self.pack()
+        self.recolorbtn = ttk.Button(self, text="recolor")
+        self.recolorbtn.bind("<Button-1>", self.color_files)
+        self.recolorbtn.pack(side=tk.TOP)
+
         self.file_list.pack(fill=tk.BOTH, expand=True)
         self.file_list.bind("<Configure>", lambda e: self.file_list.configure(width=e.width, height=e.height))
 
-        self.recolorbtn = ttk.Button(self, text="recolor")
-        self.recolorbtn.bind("<Button-1>", self.color_files)
-        self.recolorbtn.pack(side=tk.BOTTOM)
+        # does this take too long?
+        self.color_files()
+
 
 
     def update_file(self, e):
         """
         change file
+        :param e: triggering widget event (``self.file_list`` listbox)
         """
         selected = e.widget.curselection()
+        # selecon cleared on refresh
         if not selected:
-            print("WARN: no file selection")
             return
         idx = selected[0]
         logging.debug("file selected %s", idx)
@@ -197,12 +202,16 @@ class FileLister(tk.Frame):
 
         self.main.load_image(self.fnames[idx])
 
-    def color_files(self, e):
+    def color_files(self, e=None):
+        """
+        color files by if they've been seen in the db
+        :param e: triggering widget/event. ignored
+        """
         db_fname = os.path.dirname(__file__) + "/cspine.db"
         db = fetch_full_db(db_fname)
         all_files = [x['image'] for x in db]
         for i, fname in enumerate(self.file_list.get(0,tk.END)):
-            if fname in all_files:
+            if os.path.abspath(fname) in all_files:
                 self.file_list.itemconfig(i, {"bg": "gray"})
 
 
@@ -317,8 +326,8 @@ class App(tk.Frame):
     def label_select_change(self, e):
         "list box cspine point label change"
         selected = e.widget.curselection()
+        # selecon cleared; no selection on window refreshes
         if not selected:
-            print("WARN: no selection")
             return
         self.point_idx.set(selected[0])
         self.redraw_guide()
