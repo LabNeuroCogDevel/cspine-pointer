@@ -225,11 +225,20 @@ class App(tk.Frame):
     def reset_points(self):
         self.point_locs = {l: CSpinePoint(l) for l in LABELS}
 
+    def on_destroy(self, event):
+        """
+        cleanup on close: close the file list too
+        :param event: widge event calling close. used to restrict to toplevel destroy
+        """
+        if event.widget == event.widget.winfo_toplevel():
+            self.file_window.master.destroy()
+
     def __init__(self, master, savedir, fnames):
         super().__init__(master)
         self.master = master
         self.master.title("CSpine Placement")
         self.file_window = FileLister(tk.Tk(), self, fnames)
+        self.master.bind("<Destroy>", self.on_destroy)
 
         self.savedir : Optional[os.PathLike]  = savedir
 
