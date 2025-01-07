@@ -23,7 +23,7 @@ LABELS_DICT = {
           "C4": ["up","ua", "lp","m","la"]
 }
 LABELS_GUIDE = {
-'top': (0,0),
+'top': (174,100),
 'C2p':(84,414),
 'C2m':(174,378),
 'C2a':(264,414),
@@ -40,7 +40,7 @@ LABELS_GUIDE = {
 }
 
 LABEL_COLOR = {
-'top': "#FFFFFF",
+'top': "#F0F0F0",
 #
 'C2p': "#1E2EEA",
 'C2m': "#6DE6F1",
@@ -115,16 +115,24 @@ class CSpinePoint:
         self.x = None
         self.y = None
         self.z = None
+        self.rot = None
         self.timestamp = None
         self.rating = "NA"
         self.note = ""
         self.user = user or os.environ.get("USER")
 
-    def update(self, x, y, z):
+    def update(self, x, y, z, rot=0):
         """update position and change timestamp"""
-        self.x = x
-        self.y = y
-        self.z = z
+        self.rot = rot
+        if rot == 0:
+            self.x = x
+            self.y = y
+            self.z = z
+        else:
+            # TODO: unrotate
+            self.x = x
+            self.y = y
+            self.z = z
         self.timestamp = datetime.datetime.now()
 
     def todict(self) -> dict:
@@ -182,7 +190,7 @@ class StructImg:
         this_slice = np.rot90(self.data[self.idx_sag,:,:])
         return self.npimg(this_slice)
 
-    def sag_zoom(self):
+    def sag_zoom_matrix(self):
         bottom = 0 # self.sag_top
         self.zoom_left = max(self.idx_cor - self.zoom_width//2,0)
         right = min(self.zoom_left + self.zoom_width, self.pixdim[2])
@@ -190,7 +198,10 @@ class StructImg:
         this_slice = np.rot90(self.data[self.idx_sag, self.zoom_left:right, bottom:self.zoom_top])
         self.crop_size = (this_slice.shape[1]*self.zoom_fac, this_slice.shape[0]*self.zoom_fac)
         res = cv2.resize(this_slice, self.crop_size, interpolation=cv2.INTER_NEAREST)
-        return self.npimg(res)
+        return res
+
+    def sag_zoom(self):
+        return self.npimg(self.sag_zoom_matrix())
 
 class FileLister(tk.Frame):
     def __init__(self, master, mainwindow, fnames):
@@ -215,8 +226,6 @@ class FileLister(tk.Frame):
 
         # does this take too long?
         self.color_files()
-
-
 
     def update_file(self, e):
         """
@@ -306,11 +315,28 @@ class App(tk.Frame):
         cor = self.img.slice_sag()
         sag = self.img.slice_cor()
 
+        self.frame = tk.Frame(self)
+
         zoom_data = self.img.sag_zoom()
-        self.zoom = tk.Canvas(self,width=zoom_data.width(), height=zoom_data.height(), background="red")
+        self.zoom = tk.Canvas(self.frame,width=zoom_data.width(), height=zoom_data.height(), background="red")
         self.c_cor= tk.Canvas(self, width=sag.width(), height=sag.height(), background="black")
         self.c_sag= tk.Canvas(self, width=cor.width(), height=cor.height(), background="black")
         self.c_guide =tk.Canvas(self, width=self.guide_img.width(), height=self.guide_img.height(), background="black")
+
+        self.rot_left = ttk.Button(self.frame,text="⮌")
+        self.rot_right = ttk.Button(self.frame,text="⮎")
+        self.rot_left.bind("<Button-1>", self.rot_btn_click)
+        self.rot_right.bind("<Button-1>", self.rot_btn_click)
+
+        self.zoom_rot = tk.StringVar()
+        self.zoom_rot.set("0")
+        self.rot_label = ttk.Entry(self.frame,textvariable=self.zoom_rot, width=4)
+
+        # manage frame
+        self.zoom.grid(row=0,column=0,columnspan=3)
+        self.rot_left.grid(row=1,column=0)
+        self.rot_right.grid(row=1,column=1)
+        self.rot_label.grid(row=1,column=2)
 
         # Bind the mouse click event
         self.zoom.bind("<Button-1>", self.place_point)
@@ -319,12 +345,19 @@ class App(tk.Frame):
         self.zoom.bind("<Button-2>", lambda _: self.next_label(-1))
 
         self.c_cor.bind("<Button-1>", self.place_line)
+
         self.c_sag.bind("<Button-1>", self.place_line)
 
         self.c_guide.pack(side=tk.LEFT)
         self.c_cor.pack(side=tk.LEFT)
         self.c_sag.pack(side=tk.LEFT)
-        self.zoom.pack(side=tk.LEFT)
+        self.frame.pack(side=tk.LEFT)
+
+
+
+
+        #self.zoom.pack(side=tk.LEFT)
+        self.frame.pack(side=tk.LEFT)
 
         self.point_idx = tk.IntVar(self)
         self.point_labels = tk.Listbox(self)
@@ -464,6 +497,10 @@ class App(tk.Frame):
 
         real_x = point.x
         real_y = point.y
+        if point.rot:
+            pass
+            # TODO: rotate
+
         x = (real_x - self.img.zoom_left)*self.img.zoom_fac
         y = (real_y - self.img.pixdim[2])*self.img.zoom_fac + self.img.crop_size[1]
 
@@ -473,6 +510,24 @@ class App(tk.Frame):
         self.c_cor.create_oval(self.img.idx_sag-1, real_y-1,
                                self.img.idx_sag+1, real_y+1,
                                fill="red")
+
+    def rot_btn_click(self, event):
+        """
+        update rotation
+        """
+        try:
+            val = float(self.zoom_rot.get())
+        except e:
+            val = 0
+        if event.widget == self.rot_left:
+            val += .5
+        elif event.widget == self.rot_right:
+            val -= .5
+        else:
+            print("ERROR: unknown widget %s", event.widget)
+            return
+        self.zoom_rot.set(str(val))
+        self.redraw_zoom_window()
 
 
     def place_point(self, event):
@@ -488,7 +543,7 @@ class App(tk.Frame):
         i = self.point_idx.get()
         label = LABELS[i]
         point = self.point_locs[label]
-        point.update(real_x, real_y, self.img.idx_sag)
+        point.update(real_x, real_y, self.img.idx_sag, self.rot_label.get())
         # when user is not empty
         if this_user := self.user_text.get():
             point.user = this_user
@@ -557,8 +612,21 @@ class App(tk.Frame):
         for performance, could track circles to delete them instead of redrawing?"""
 
         self.zoom.delete("ALL")
+
+        zoom = self.img.sag_zoom_matrix()
+        # TODO: create/use 'sag_zoom(rot)'
+        rot = float(self.rot_label.get())
+        if rot != 0:
+            h, w = zoom.shape[:2]
+            rot_point = (0, h) #: rotate at bottom center of image
+            mat = cv2.getRotationMatrix2D(rot_point, rot, 1)
+            zoom = cv2.warpAffine(zoom, mat, (w, h))
+        self.zoom_img =self.img.npimg(zoom)
+
+
         self.zoom.create_image(self.zoom_img.width(), self.zoom_img.height(), anchor="se", image=self.zoom_img)
 
+        # TODO: if rot, make sloped line
         self.c_sag.create_line(self.img.idx_cor, 300, self.img.idx_cor, 30, fill="green")
         self.c_cor.create_line(self.img.idx_sag, 300, self.img.idx_sag, 30, fill="green")
 
