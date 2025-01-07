@@ -17,11 +17,13 @@ import logging
 logging.basicConfig(level=os.environ.get("LOGLEVEL", logging.INFO))
 
 LABELS_DICT = {
+          "top": [""],
           "C2": ["p", "m", "a"],
           "C3": ["up","ua", "lp","m","la"],
           "C4": ["up","ua", "lp","m","la"]
 }
 LABELS_GUIDE = {
+'top': (0,0),
 'C2p':(84,414),
 'C2m':(174,378),
 'C2a':(264,414),
@@ -35,6 +37,26 @@ LABELS_GUIDE = {
 'C4lp':(50,756),
 'C4m':(124,732),
 'C4la':(198,760)
+}
+
+LABEL_COLOR = {
+'top': "#FFFFFF",
+#
+'C2p': "#1E2EEA",
+'C2m': "#6DE6F1",
+'C2a': "#1E2EEA",
+#
+'C3up':"#F7FC53",
+'C3ua':"#75FB4C",
+'C3lp':"#F7FC53",
+'C3m': "#75FB4C",
+'C3la':"#F7FC53",
+#
+'C4up':"#F730DF",
+'C4ua':"#FF3726",
+'C4lp':"#F730DF",
+'C4m': "#FF3726",
+'C4la':"#F730DF"
 }
 
 LABELS = [k+x for k in LABELS_DICT.keys() for x in LABELS_DICT[k]]
@@ -60,6 +82,12 @@ def fetch_full_db(db_fname: os.PathLike) -> list[dict[str,str]]:
 
 
 def set_color(clabel: str) -> str:
+    """
+    derive colors by changing saturation by per-section. fixed colors C4-C2.
+    20250107 - deprecated. using fixed every other color.
+    :param clabel: label from LABELS_GUIDE. 'C4up' split to 'C4' (color) and 'up' (sat)
+    :return: hex color
+    """
     colors = {'C4': (255,0,0), 'C3': (0,255,0), 'C2': (0,0,255)}
     base_color =  colors.get(clabel[0:2], (255,255,0))
     pos = clabel[2:]
@@ -76,7 +104,8 @@ def set_color(clabel: str) -> str:
     #print(f"# {base_color} to {h}, {s}=>{sat}, {l}; {rgb_san} is now {ashex}")
     return ashex
 
-LABEL_COLOR = {k: set_color(k) for k in LABELS}
+# using hard coded every-other
+# LABEL_COLOR = {k: set_color(k) for k in LABELS}
 
 
 class CSpinePoint:
