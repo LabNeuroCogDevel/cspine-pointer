@@ -108,7 +108,12 @@ class CSpinePoint:
 class StructImg:
     def __init__(self, fname):
         self.fname =  os.path.abspath(fname)
-        self.data = nib.load(fname).dataobj
+        nii = nib.load(fname)
+        orient = nib.orientations.aff2axcodes(nii.affine)
+        if orient != ('R','A','S'): # RAS+, LPI in afni?
+            logging.info("orient of %s (%s) not RAS+, trying to fix", fname, orient)
+            nii = nib.as_closest_canonical(nii)
+        self.data = nii.dataobj
         self.pixdim = self.data.shape
         self.idx_cor = self.pixdim[2]//2
         self.idx_sag = self.pixdim[1]//2
@@ -539,12 +544,21 @@ class App(tk.Frame):
         NB. called from button binding. needs return "break" to reset button (otherwise it stays sunken/depressed)
         """
         if fname is None:
-            fname = re.sub('.nii(.gz)$', '', self.img.fname) +\
-                f"_cspine-{os.environ['USER']}_create-{datetime.datetime.now().strftime('%FT%H%M%S')}.tsv"
-            fname = asksaveasfilename(initialdir=self.savedir or os.path.dirname(fname), initialfile=os.path.basename(fname))
+            fname = f"_cspine-{os.environ['USER']}_create-{datetime.datetime.now().strftime('%FT%H%M%S')}.tsv"
+
+            # match ncanda id expliclity. in path but all files are t1.nii.gz
+            if m := re.search('NCANDA_S[0-9]+', self.img.fname):
+                logging.info("filename %s matches NCANDA subject, updating output name", self.img.fname)
+                fname = m.group() + "_" + fname
+
+            fname = re.sub('.nii(.gz)$', '', self.img.fname) +  fname
+
+            initdir = self.savedir or os.path.join(os.path.dirname(fname), 'out')
+            fname = asksaveasfilename(initialdir=initdir, initialfile=os.path.basename(fname))
         if not fname:
             return "break"
-        print(fname)
+
+        logging.info("propose saving to %s", fname)
         if fname == self.img.fname:
             raise Exception(f"text output {fname} should not be the same as input image {self.img.fname}")
         #if fname[-3:] == '.tsv':
