@@ -535,6 +535,12 @@ class App(tk.Frame):
         place colored circle on spine when image is clicked
         """
         x, y, c = event.x, event.y, event.widget
+        # TODO: make this function in struct?
+        if rot := self.rot_label.get():
+            rot_point = (0, 0) # TODO: fix this
+            M_inv = cv2.getRotationMatrix2D(rot_point, -rot, 1)
+            unrot = np.dot(M_inv, np.array([x, y, 1]))
+
         real_x = x//self.img.zoom_fac + self.img.zoom_left
         # 256 - (255-56)//3
         real_y = self.img.pixdim[2] -  (self.img.crop_size[1] - y)//self.img.zoom_fac
