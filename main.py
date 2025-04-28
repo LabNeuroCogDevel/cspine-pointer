@@ -140,21 +140,40 @@ class CSpinePoint:
 
 class StructImg:
     def __init__(self, fname):
+
+        self.zoom_width = 30 # self.pixdim[2]//3
+        self.zoom_fac = 3
+        # 20250428 - SPA slice is big! keep smaller default
+        #  but if see slice is large, update to half instead of 1/3
+        zoom_top_fac=3
+
         self.fname =  os.path.abspath(fname)
         nii = nib.load(fname)
         orient = nib.orientations.aff2axcodes(nii.affine)
         if orient != ('R','A','S'): # RAS+, LPI in afni?
             logging.info("orient of %s (%s) not RAS+, trying to fix", fname, orient)
-            nii = nib.as_closest_canonical(nii)
+            # 20250428: SPA cspine is 2D. fake 3D
+            if len(nii.shape) == 2 and orient == ('P', 'S', 'R'):
+                #nii_3d =  np.reshape(nii.get_fdata(), (*nii.shape ,1))
+                nii_2d = nii.get_fdata()
+                nii_3d =  np.stack([nii_2d, nii_2d],axis=0)
+                # access like
+                # self.data[self.idx_sag, self.zoom_left:right, bottom:self.zoom_top])
+                nii = nib.nifti1.Nifti1Image(nii_3d, nii.affine, header=nii.header)
+
+                self.zoom_width = 60
+                self.zoom_fac = 2
+                zoom_top_fac = 2
+            else:
+                nii = nib.as_closest_canonical(nii)
         self.data = nii.dataobj
         self.pixdim = self.data.shape
         self.idx_cor = self.pixdim[2]//2
-        self.idx_sag = self.pixdim[1]//2
+        self.idx_sag = self.pixdim[0]//2 # 20250428!! this was pixdim[1]
+
         self.min_val, self.max_val = np.percentile(self.data, [2,98])
 
-        self.zoom_width = 30 # self.pixdim[2]//3
-        self.zoom_fac = 3
-        self.zoom_top = self.pixdim[2]//3
+        self.zoom_top = self.pixdim[2]//zoom_top_fac
         self.zoom_left = max(self.idx_cor - self.zoom_width//2,0)
         self.crop_size = (0,0) # set in sag_zoom, used by place_point
 
@@ -563,8 +582,8 @@ class App(tk.Frame):
         self.zoom.delete("ALL")
         self.zoom.create_image(self.zoom_img.width(), self.zoom_img.height(), anchor="se", image=self.zoom_img)
 
-        self.c_sag.create_line(self.img.idx_cor, 300, self.img.idx_cor, 30, fill=LINE_COLOR, width=LINE_WIDTH)
-        self.c_cor.create_line(self.img.idx_sag, 300, self.img.idx_sag, 30, fill=LINE_COLOR, width=LINE_WIDTH)
+        self.c_sag.create_line(self.img.idx_cor, self.c_sag.winfo_height(), self.img.idx_cor, 0, fill=LINE_COLOR, width=LINE_WIDTH)
+        self.c_cor.create_line(self.img.idx_sag, self.c_cor.winfo_height(), self.img.idx_sag, 0, fill=LINE_COLOR, width=LINE_WIDTH)
 
         # replace all points
         for i in range(len(LABELS)):
