@@ -21,3 +21,11 @@ C3up    114     226     96      2024-10-05 13:59:33.070530      foranw
 ```
 
 All placements are recoded in `cspine.db`. See [`schema.txt`](schema.txt).
+
+## Data
+
+Each dataset has it's own directory with a run script and .tsv annotations file. All clicks across datasets are stored in the unified `cspine.db`
+  * `spa/`
+  * `habit/` 
+  * `pet/`
+  * `ncanda/`
