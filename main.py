@@ -16,6 +16,10 @@ from tkinter import ttk
 import logging
 logging.basicConfig(level=os.environ.get("LOGLEVEL", logging.INFO))
 
+#: color of the center line on sagital images showing where the slice is taken from
+LINE_COLOR = "lightgreen"
+LINE_WIDTH = 5  #: sagital center line reference width in pixels
+
 LABELS_DICT = {
           "top": [""],
           "C2": ["p", "m", "a"],
@@ -633,8 +637,8 @@ class App(tk.Frame):
         self.zoom.create_image(self.zoom_img.width(), self.zoom_img.height(), anchor="se", image=self.zoom_img)
 
         # TODO: if rot, make sloped line
-        self.c_sag.create_line(self.img.idx_cor, 300, self.img.idx_cor, 30, fill="green")
-        self.c_cor.create_line(self.img.idx_sag, 300, self.img.idx_sag, 30, fill="green")
+        self.c_sag.create_line(self.img.idx_cor, 300, self.img.idx_cor, 30, fill=LINE_COLOR, width=LINE_WIDTH)
+        self.c_cor.create_line(self.img.idx_sag, 300, self.img.idx_sag, 30, fill=LINE_COLOR, width=LINE_WIDTH)
 
         # replace all points
         for i in range(len(LABELS)):
