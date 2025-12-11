@@ -537,7 +537,7 @@ class App(tk.Frame):
         # apply rotation to stored point
         M = self.get_rot()
         unrot = np.dot(M, np.array([real_x, real_y, 1]))
-        real_x, real_y = np.round(unrot[:2],1)
+        real_x, real_y = np.round(unrot[:2],2)
 
         x = (real_x - self.img.zoom_left)*self.img.zoom_fac
         y = (real_y - self.img.pixdim[2])*self.img.zoom_fac + self.img.crop_size[1]
@@ -693,19 +693,22 @@ class App(tk.Frame):
         self.zoom.delete("ALL")
 
         zoom = self.img.sag_zoom_matrix()
-        # TODO: create/use 'sag_zoom(rot)'
-        rot = float(self.rot_label.get())
-        if rot != 0:
-            mat = self.get_rot()
-            h,w = zoom.shape[:2]
-            zoom = cv2.warpAffine(zoom, mat, (w, h))
+        mat = self.get_rot()
+        h,w = zoom.shape[:2]
+        zoom = cv2.warpAffine(zoom, mat, (w, h))
         self.zoom_img =self.img.npimg(zoom)
 
 
         self.zoom.create_image(self.zoom_img.width(), self.zoom_img.height(), anchor="se", image=self.zoom_img)
 
         # TODO: if rot, make sloped line
-        self.c_sag.create_line(self.img.idx_cor, 300, self.img.idx_cor, 30, fill=LINE_COLOR, width=LINE_WIDTH)
+        #rot = float(self.rot_label.get())
+        #line_end = np.dot(mat, np.array([0, 300, 1]))
+        self.c_sag.create_line(self.img.idx_cor, 300,
+                               #line_end[0]+self.img.idx_cor,line_end[1],
+                               self.img.idx_cor, 30,
+                               fill=LINE_COLOR, width=LINE_WIDTH)
+
         self.c_cor.create_line(self.img.idx_sag, 300, self.img.idx_sag, 30, fill=LINE_COLOR, width=LINE_WIDTH)
 
         # replace all points
