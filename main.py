@@ -136,15 +136,9 @@ class CSpinePoint:
     def update(self, x, y, z, rot=0):
         """update position and change timestamp"""
         self.rot = rot
-        if rot == 0:
-            self.x = x
-            self.y = y
-            self.z = z
-        else:
-            # TODO: unrotate
-            self.x = x
-            self.y = y
-            self.z = z
+        self.x = x
+        self.y = y
+        self.z = z
         self.timestamp = datetime.datetime.now()
 
     def rotate(self, M):
@@ -181,6 +175,13 @@ class StructImg:
         self.zoom_left = max(self.idx_cor - self.zoom_width//2,0)
         self.crop_size = (0,0) # set in sag_zoom, used by place_point
 
+    def update_zoom(self, fac):
+        """
+        change zoom box
+        @param fac scale factor"""
+        self.zoom_fac = fac
+        self.zoom_top = self.pixdim[2]//fac
+
     def npimg(self, x):
         minimum = self.min_val
         maximum = self.max_val
@@ -214,7 +215,9 @@ class StructImg:
         self.zoom_left = max(self.idx_cor - self.zoom_width//2,0)
         right = min(self.zoom_left + self.zoom_width, self.pixdim[2])
 
-        this_slice = np.rot90(self.data[self.idx_sag, self.zoom_left:right, bottom:self.zoom_top])
+        this_slice = np.rot90(self.data[self.idx_sag,
+                                        self.zoom_left:right,
+                                        bottom:self.zoom_top])
         self.crop_size = (this_slice.shape[1]*self.zoom_fac, this_slice.shape[0]*self.zoom_fac)
         res = cv2.resize(this_slice, self.crop_size, interpolation=cv2.INTER_NEAREST)
         return res
@@ -356,15 +359,21 @@ class App(tk.Frame):
         self.rot_left.bind("<Button-1>", self.rot_btn_click)
         self.rot_right.bind("<Button-1>", self.rot_btn_click)
 
+        self.scale_zoom = ttk.Scale(self.frame, from_=1, to=6,
+                                    orient=tk.HORIZONTAL,
+                                    command=self.update_zoom)
+        self.scale_zoom.set(self.img.zoom_fac)
+
         self.zoom_rot = tk.StringVar()
         self.zoom_rot.set("0")
         self.rot_label = ttk.Entry(self.frame,textvariable=self.zoom_rot, width=4)
 
         # manage frame
-        self.zoom.grid(row=0,column=0,columnspan=3)
-        self.rot_left.grid(row=1,column=0)
-        self.rot_right.grid(row=1,column=1)
-        self.rot_label.grid(row=1,column=2)
+        self.scale_zoom.grid(row=0,column=0,columnspan=3)
+        self.zoom.grid(row=1,column=0,columnspan=3)
+        self.rot_left.grid(row=2,column=0)
+        self.rot_right.grid(row=2,column=1)
+        self.rot_label.grid(row=2,column=2)
 
         # Bind the mouse click event
         self.zoom.bind("<Button-1>", self.place_point)
@@ -437,6 +446,10 @@ class App(tk.Frame):
         point = self.point_locs[label]
         return point
 
+    def update_zoom(self, event):
+        self.img.update_zoom(int(self.scale_zoom.get()))
+        print(f"zoom updated to {self.img.zoom_fac}")
+        self.draw_images()
 
     def match_rating(self):
         "after changing to set a label, update raiting and note display"
@@ -568,20 +581,20 @@ class App(tk.Frame):
         """
         translate positoin of cursor click on zoomed and rotated image
         to coordnate.
-        Use img.zoom_left, img.zoom_frac, image.pixim[2], image.crop_size
+        Use img.zoom_left, img.zoom_fac, image.pixim[2], image.crop_size
         @param x
         @param y
         """
 
-        real_x = x//self.img.zoom_fac + self.img.zoom_left
-        # 256 - (255-56)//3
-        real_y = self.img.pixdim[2] -  (self.img.crop_size[1] - y)//self.img.zoom_fac
+        real_x = x/self.img.zoom_fac + self.img.zoom_left
+        # 256 - (255-56)/3
+        real_y = self.img.pixdim[2] -  (self.img.crop_size[1] - y)/self.img.zoom_fac
+        real_x, real_y = np.round([real_x, real_y], 2)
 
-        # TODO: make this function in struct?
         if self.rot_label.get():
             M_inv = self.get_rot(inverse=True)
             unrot = np.dot(M_inv, np.array([real_x, real_y, 1]))
-            real_x, real_y = np.round(unrot[:2],1)
+            real_x, real_y = np.round(unrot[:2],2)
         return real_x, real_y
 
 
