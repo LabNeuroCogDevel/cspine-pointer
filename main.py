@@ -66,6 +66,14 @@ LABEL_COLOR = {
 LABELS = [k+x for k in LABELS_DICT.keys() for x in LABELS_DICT[k]]
 
 
+def affine(rot, h=0, inverse=False):
+    if inverse:
+        rot = -1 * rot
+    # params are (center, angle, scale)
+    return cv2.getRotationMatrix2D((0, h), rot, 1)
+
+
+
 def fetch_full_db(db_fname: os.PathLike) -> list[dict[str,str]]:
     """
     >>> res = fetch_full_db("./cspine.db")
@@ -138,6 +146,13 @@ class CSpinePoint:
             self.y = y
             self.z = z
         self.timestamp = datetime.datetime.now()
+
+    def rotate(self, M):
+        """Rotate points
+        @param M affinte transform
+        """
+        rot = np.dot(M, np.array([self.x, self.y, 1]))
+        return rot[:2]
 
     def todict(self) -> dict:
         """ convert object to dict for easier seralization """
@@ -255,6 +270,10 @@ class FileLister(tk.Frame):
         :param e: triggering widget/event. ignored
         """
         db_fname = os.path.dirname(__file__) + "/cspine.db"
+        if not os.path.exists(db_fname):
+            print(f"WARNING: no DB (yet) at {db_fname}. can't color")
+            return
+        print(f"opening {db_fname} to` color")
         db = fetch_full_db(db_fname)
         all_files = [x['image'] for x in db]
         for i, fname in enumerate(self.file_list.get(0,tk.END)):
@@ -303,7 +322,12 @@ class App(tk.Frame):
         # protect from garbage collection
         self.slice_cor = None
         self.slice_sag = None
-        self.guide_img = ImageTk.PhotoImage(file=os.path.dirname(__file__) + "/guide-image-small.png")
+
+        guide_image = os.path.dirname(__file__) + "/guide-image-small.png"
+        if os.path.exists(guide_image):
+            self.guide_img = ImageTk.PhotoImage(file=guide_image)
+        else:
+            self.guide_img = ImageTk.PhotoImage(image=Image.fromarray(np.zeros((183,389))))
         # need to pack root before anything else will show
         self.pack()
 
@@ -492,27 +516,34 @@ class App(tk.Frame):
         self.img.idx_sag += change
         self.draw_images()
 
+    def point_to_image(self, point: CSpinePoint) -> tuple[2]:
+        """Move from point on brain to where it's displayed on the image"""
+        real_x = point.x
+        real_y = point.y
+
+        # apply rotation to stored point
+        M = self.get_rot()
+        unrot = np.dot(M, np.array([real_x, real_y, 1]))
+        real_x, real_y = np.round(unrot[:2],1)
+
+        x = (real_x - self.img.zoom_left)*self.img.zoom_fac
+        y = (real_y - self.img.pixdim[2])*self.img.zoom_fac + self.img.crop_size[1]
+        return x, y
+
+
     def redraw_point(self, i):
         "using stored 'real' x,y to redraw cspine label locations."
         label = LABELS[i]
         point = self.point_locs[label]
         if not point.x or not point.y:
             return
-
-        real_x = point.x
-        real_y = point.y
-        if point.rot:
-            pass
-            # TODO: rotate
-
-        x = (real_x - self.img.zoom_left)*self.img.zoom_fac
-        y = (real_y - self.img.pixdim[2])*self.img.zoom_fac + self.img.crop_size[1]
+        x, y = self.point_to_image(point)
 
         r = 10//2
         self.zoom.create_oval(x-r, y-r, x+r, y+r, fill=point.color, outline='white')
-        self.c_sag.create_oval(real_x-1,real_y-1,real_x+1,real_y+1,fill=point.color)
-        self.c_cor.create_oval(self.img.idx_sag-1, real_y-1,
-                               self.img.idx_sag+1, real_y+1,
+        self.c_sag.create_oval(point.x-1,point.y-1,point.x+1,point.y+1,fill=point.color)
+        self.c_cor.create_oval(self.img.idx_sag-1, point.y-1,
+                               self.img.idx_sag+1, point.y+1,
                                fill="red")
 
     def rot_btn_click(self, event):
@@ -533,21 +564,34 @@ class App(tk.Frame):
         self.zoom_rot.set(str(val))
         self.redraw_zoom_window()
 
+    def cursor_to_brain(self, x, y):
+        """
+        translate positoin of cursor click on zoomed and rotated image
+        to coordnate.
+        Use img.zoom_left, img.zoom_frac, image.pixim[2], image.crop_size
+        @param x
+        @param y
+        """
+
+        real_x = x//self.img.zoom_fac + self.img.zoom_left
+        # 256 - (255-56)//3
+        real_y = self.img.pixdim[2] -  (self.img.crop_size[1] - y)//self.img.zoom_fac
+
+        # TODO: make this function in struct?
+        if self.rot_label.get():
+            M_inv = self.get_rot(inverse=True)
+            unrot = np.dot(M_inv, np.array([real_x, real_y, 1]))
+            real_x, real_y = np.round(unrot[:2],1)
+        return real_x, real_y
+
 
     def place_point(self, event):
         """
         place colored circle on spine when image is clicked
         """
         x, y, c = event.x, event.y, event.widget
-        # TODO: make this function in struct?
-        if rot := self.rot_label.get():
-            rot_point = (0, 0) # TODO: fix this
-            M_inv = cv2.getRotationMatrix2D(rot_point, -rot, 1)
-            unrot = np.dot(M_inv, np.array([x, y, 1]))
+        real_x, real_y = self.cursor_to_brain(event.x, event.y)
 
-        real_x = x//self.img.zoom_fac + self.img.zoom_left
-        # 256 - (255-56)//3
-        real_y = self.img.pixdim[2] -  (self.img.crop_size[1] - y)//self.img.zoom_fac
         #import ipdb;ipdb.set_trace()
 
         i = self.point_idx.get()
@@ -615,6 +659,18 @@ class App(tk.Frame):
 
         self.redraw_guide()
 
+    def get_rot(self, h=None, inverse = False):
+        """
+        Wrap py:func:`affine` with  using rot_label and crop_size
+        @param inverse get inverse rotation
+        @returns 2D rotation matrix
+        """
+        rot = float(self.rot_label.get())
+        #: w,h here; rev of h,w = sag_zoom_matrix().shape[:2]
+        if h is None:
+            h = self.img.crop_size[1]
+        return affine(rot, h, inverse)
+
 
     def redraw_zoom_window(self):
         """overwrite the zoomed area and redraw any placed points.
@@ -627,9 +683,8 @@ class App(tk.Frame):
         # TODO: create/use 'sag_zoom(rot)'
         rot = float(self.rot_label.get())
         if rot != 0:
-            h, w = zoom.shape[:2]
-            rot_point = (0, h) #: rotate at bottom center of image
-            mat = cv2.getRotationMatrix2D(rot_point, rot, 1)
+            mat = self.get_rot()
+            h,w = zoom.shape[:2]
             zoom = cv2.warpAffine(zoom, mat, (w, h))
         self.zoom_img =self.img.npimg(zoom)
 
@@ -643,6 +698,13 @@ class App(tk.Frame):
         # replace all points
         for i in range(len(LABELS)):
             self.redraw_point(i)
+
+
+    def __repr__(self):
+        print(f"input={self.img.fname}; ")
+        print(f"sag={self.img.idx_sag}; cor={self.img.idx_cor};")
+        print(f"crop={self.img.crop_size}; zoom={self.img.zoom_fac};\n")
+        print(f"left={self.img.zoom_left}; pixdim = {self.self.pixdim}\n")
 
 
     def save_full(self, fname:Optional[str] = None):
@@ -700,8 +762,7 @@ class App(tk.Frame):
             conn.commit()
             return cur.lastrowid
 
-
-if __name__ == "__main__":
+def main():
     import sys
     if len(sys.argv) < 2:
         print(f"USAGE: {sys.argv[0]} cspine_image.nii.gz cspine_image2.nii.gz")
@@ -717,3 +778,6 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = App(master=root,savedir=args.output_dir, fnames=args.fnames)
     app.mainloop()
+
+if __name__ == "__main__":
+    main()
