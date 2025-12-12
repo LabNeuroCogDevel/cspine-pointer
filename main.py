@@ -152,7 +152,7 @@ class CSpinePoint:
         """ convert object to dict for easier seralization """
         return {'label': self.label,
                 'x': self.x, 'y': self.y, 'sag_i': self.z, 'timestamp': self.timestamp,
-                'rating': self.rating, 'note': self.note, 
+                'rating': self.rating, 'note': self.note,
                 'user': self.user}
 
 class StructImg:
@@ -342,6 +342,13 @@ class App(tk.Frame):
         self.master.title("CSpine Placement")
         self.file_window = FileLister(tk.Tk(), self, fnames)
         self.master.bind("<Destroy>", self.on_destroy)
+
+        menubar = tk.Menu(self.master)
+        self.master.config(menu=menubar)
+
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Load from DB", command=self.load_current_from_db)
 
         self.savedir : Optional[os.PathLike]  = savedir
 
@@ -795,6 +802,65 @@ class App(tk.Frame):
                               point.rating, point.note))
             conn.commit()
             return cur.lastrowid
+
+    def load_from_db(self, fname):
+        """
+        Load a file from the database, update structimg, populate points, and redraw.
+        @param fname: path to the image file to load from database
+        """
+        fname = os.path.abspath(fname)
+        if not os.path.exists(fname):
+            print("WARNING: {fname} doesn't exist!")
+            return
+        self.img = StructImg(fname)
+        self.reset_points()
+
+        with sqlite3.connect(self.db_fname) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            # Get the most recent points for each label for this image
+            sql = '''SELECT * FROM point
+                     WHERE image = ?
+                     ORDER BY created DESC'''
+            cur.execute(sql, (fname,))
+            db_points = cur.fetchall()
+
+        if not db_points:
+            print("WARNING: {fname} has no entires in DB!")
+            return
+
+        # can have multiple entries for single point
+        # order by timestamp and only add first (newest) to dict/GUI
+        latest_points = {}
+        for row in db_points:
+            label = row['label']
+            if label not in latest_points:
+                latest_points[label] = row
+        for label, row in latest_points.items():
+            if not label in self.point_locs:
+                continue
+            point = self.point_locs[label]
+            point.update(row['x'], row['y'], row['z'])
+            point.rating = row['rating'] or "NA"
+            point.note = row['note'] or ""
+            point.user = row['user']
+            point.timestamp = row['created']
+
+
+        # coordnates into labels
+        for i, _ in enumerate(LABELS):
+            self.update_label(i)
+        self.point_labels.selection_set(0)
+
+        # get best center line
+        self.img.idx_sag = int(np.mean([p.z for p in self.point_locs.values()]))
+        self.img.idx_cor = int(np.mean([p.x for p in self.point_locs.values()]))
+        print(f"read {len(row)} entires for {fname}. updated z/sag={self.img.idx_cor} x/cor={self.img.idx_sag}")
+        self.draw_images()
+
+    def load_current_from_db(self):
+        """Load the current file from database via menu command"""
+        self.load_from_db(self.img.fname)
 
 def main():
     import sys
