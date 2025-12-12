@@ -225,6 +225,21 @@ class StructImg:
     def sag_zoom(self):
         return self.npimg(self.sag_zoom_matrix())
 
+
+    def point_onto_zoom(self, real_x, real_y):
+        "project sagital points onto zoomed frame"""
+        x = (real_x - self.zoom_left)*self.zoom_fac
+        y = (real_y - self.pixdim[2])*self.zoom_fac + self.crop_size[1]
+        return x, y
+
+    def zoom_onto_full(self, x, y):
+        """zoom x,y coord onto full image"""
+        real_x = x/self.zoom_fac + self.zoom_left
+        #                    256 - (255-56)/3
+        real_y = self.pixdim[2] -  (self.crop_size[1] - y)/self.zoom_fac
+        real_x, real_y = np.round([real_x, real_y], 2)
+        return real_x, real_y
+
 class FileLister(tk.Frame):
     def __init__(self, master, mainwindow, fnames):
         super().__init__(master)
@@ -539,8 +554,7 @@ class App(tk.Frame):
         unrot = np.dot(M, np.array([real_x, real_y, 1]))
         real_x, real_y = np.round(unrot[:2],2)
 
-        x = (real_x - self.img.zoom_left)*self.img.zoom_fac
-        y = (real_y - self.img.pixdim[2])*self.img.zoom_fac + self.img.crop_size[1]
+        x, y = self.img.point_onto_zoom(real_x, real_y)
         return x, y
 
 
@@ -585,11 +599,7 @@ class App(tk.Frame):
         @param x
         @param y
         """
-
-        real_x = x/self.img.zoom_fac + self.img.zoom_left
-        # 256 - (255-56)/3
-        real_y = self.img.pixdim[2] -  (self.img.crop_size[1] - y)/self.img.zoom_fac
-        real_x, real_y = np.round([real_x, real_y], 2)
+        real_x, real_y = self.img.zoom_onto_full(x,y)
 
         if self.rot_label.get():
             M_inv = self.get_rot(inverse=True)
