@@ -210,14 +210,24 @@ class StructImg:
         this_slice = np.rot90(self.data[self.idx_sag,:,:])
         return self.npimg(this_slice)
 
-    def sag_zoom_matrix(self):
-        bottom = 0 # self.sag_top
-        self.zoom_left = max(self.idx_cor - self.zoom_width//2,0)
-        right = min(self.zoom_left + self.zoom_width, self.pixdim[2])
+    def sag_zoom_matrix(self, rot=0):
+        """
+        Zoom in on optionally rotated sagital image.
 
-        this_slice = np.rot90(self.data[self.idx_sag,
-                                        self.zoom_left:right,
-                                        bottom:self.zoom_top])
+        @param rot how much to rotate
+        """
+        full_slice = np.rot90(self.data[self.idx_sag,:,:])
+
+        h, w = full_slice.shape
+        if rot != 0:
+            M = cv2.getRotationMatrix2D((0, h), rot, 1)
+            full_slice = cv2.warpAffine(full_slice, M, (w, h))
+
+        self.zoom_left = max(self.idx_cor - self.zoom_width//2,0)
+        right = min(self.zoom_left + self.zoom_width, w)
+
+        this_slice = full_slice[(h-self.zoom_top):h, self.zoom_left:right]
+
         self.crop_size = (this_slice.shape[1]*self.zoom_fac, this_slice.shape[0]*self.zoom_fac)
         res = cv2.resize(this_slice, self.crop_size, interpolation=cv2.INTER_NEAREST)
         return res
@@ -363,6 +373,12 @@ class App(tk.Frame):
 
         self.frame = tk.Frame(self)
 
+        # this defined early so sag_zoom can look into it
+        self.point_idx = tk.IntVar(self)
+        self.zoom_rot = tk.StringVar()
+        self.zoom_rot.set("0")
+        self.rot_label = ttk.Entry(self.frame,textvariable=self.zoom_rot, width=4)
+
         zoom_data = self.img.sag_zoom()
         self.zoom = tk.Canvas(self.frame,width=zoom_data.width(), height=zoom_data.height(), background="red")
         self.c_cor= tk.Canvas(self, width=sag.width(), height=sag.height(), background="black")
@@ -378,10 +394,6 @@ class App(tk.Frame):
                                     orient=tk.HORIZONTAL,
                                     command=self.update_zoom)
         self.scale_zoom.set(self.img.zoom_fac)
-
-        self.zoom_rot = tk.StringVar()
-        self.zoom_rot.set("0")
-        self.rot_label = ttk.Entry(self.frame,textvariable=self.zoom_rot, width=4)
 
         # manage frame
         self.scale_zoom.grid(row=0,column=0,columnspan=3)
@@ -411,7 +423,6 @@ class App(tk.Frame):
         #self.zoom.pack(side=tk.LEFT)
         self.frame.pack(side=tk.LEFT)
 
-        self.point_idx = tk.IntVar(self)
         self.point_labels = tk.Listbox(self)
         self.point_labels.bind("<<ListboxSelect>>", self.label_select_change)
 
@@ -463,7 +474,6 @@ class App(tk.Frame):
 
     def update_zoom(self, event):
         self.img.update_zoom(int(self.scale_zoom.get()))
-        print(f"zoom updated to {self.img.zoom_fac}")
         self.draw_images()
 
     def match_rating(self):
@@ -601,7 +611,7 @@ class App(tk.Frame):
         """
         real_x, real_y = self.img.zoom_onto_full(x,y)
 
-        if self.rot_label.get():
+        if self.zoom_rot.get():
             M_inv = self.get_rot(inverse=True)
             unrot = np.dot(M_inv, np.array([real_x, real_y, 1]))
             real_x, real_y = np.round(unrot[:2],2)
@@ -620,7 +630,7 @@ class App(tk.Frame):
         i = self.point_idx.get()
         label = LABELS[i]
         point = self.point_locs[label]
-        point.update(real_x, real_y, self.img.idx_sag, self.rot_label.get())
+        point.update(real_x, real_y, self.img.idx_sag, self.zoom_rot.get())
         # when user is not empty
         if this_user := self.user_text.get():
             point.user = this_user
@@ -684,11 +694,11 @@ class App(tk.Frame):
 
     def get_rot(self, h=None, inverse = False):
         """
-        Wrap py:func:`affine` with  using rot_label and crop_size
+        Wrap py:func:`affine` with  using zoom_rot and crop_size
         @param inverse get inverse rotation
         @returns 2D rotation matrix
         """
-        rot = float(self.rot_label.get())
+        rot = float(self.zoom_rot.get())
         #: w,h here; rev of h,w = sag_zoom_matrix().shape[:2]
         if h is None:
             h = self.img.crop_size[1]
@@ -702,17 +712,15 @@ class App(tk.Frame):
 
         self.zoom.delete("ALL")
 
-        zoom = self.img.sag_zoom_matrix()
-        mat = self.get_rot()
-        h,w = zoom.shape[:2]
-        zoom = cv2.warpAffine(zoom, mat, (w, h))
-        self.zoom_img =self.img.npimg(zoom)
+        rot = float(self.zoom_rot.get())
+        zoom = self.img.sag_zoom_matrix(rot)
+        self.zoom_img = self.img.npimg(zoom)
 
 
         self.zoom.create_image(self.zoom_img.width(), self.zoom_img.height(), anchor="se", image=self.zoom_img)
 
         # TODO: if rot, make sloped line
-        #rot = float(self.rot_label.get())
+        #rot = float(self.zoom_rot.get())
         #line_end = np.dot(mat, np.array([0, 300, 1]))
         self.c_sag.create_line(self.img.idx_cor, 300,
                                #line_end[0]+self.img.idx_cor,line_end[1],
