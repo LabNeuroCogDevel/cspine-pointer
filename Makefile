@@ -6,3 +6,6 @@ habit/habit_filelist.txt: $(wildcard /Volumes/Hera/Projects/Habit/mr/BIDS/sub-*/
 
 guide-image-small.png: guide-image.xcf
 	magick $< -layers flatten $@
+
+.test: $(wildcard cspine/*.py *.py test/*.py)
+	python3 -m pytest test/ | tee $@

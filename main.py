@@ -27,7 +27,7 @@ LABELS_DICT = {
           "C4": ["up","ua", "lp","m","la"]
 }
 LABELS_GUIDE = {
-'top': (0,0),
+'top': (174,100),
 'C2p':(84,414),
 'C2m':(174,378),
 'C2a':(264,414),
@@ -44,7 +44,7 @@ LABELS_GUIDE = {
 }
 
 LABEL_COLOR = {
-'top': "#FFFFFF",
+'top': "#F0F0F0",
 #
 'C2p': "#1E2EEA",
 'C2m': "#6DE6F1",
@@ -64,6 +64,14 @@ LABEL_COLOR = {
 }
 
 LABELS = [k+x for k in LABELS_DICT.keys() for x in LABELS_DICT[k]]
+
+
+def affine(rot, h=0, inverse=False):
+    if inverse:
+        rot = -1 * rot
+    # params are (center, angle, scale)
+    return cv2.getRotationMatrix2D((0, h), rot, 1)
+
 
 
 def fetch_full_db(db_fname: os.PathLike) -> list[dict[str,str]]:
@@ -119,23 +127,32 @@ class CSpinePoint:
         self.x = None
         self.y = None
         self.z = None
+        self.rot = None
         self.timestamp = None
         self.rating = "NA"
         self.note = ""
         self.user = user or os.environ.get("USER")
 
-    def update(self, x, y, z):
+    def update(self, x, y, z, rot=0):
         """update position and change timestamp"""
+        self.rot = rot
         self.x = x
         self.y = y
         self.z = z
         self.timestamp = datetime.datetime.now()
 
+    def rotate(self, M):
+        """Rotate points
+        @param M affinte transform
+        """
+        rot = np.dot(M, np.array([self.x, self.y, 1]))
+        return rot[:2]
+
     def todict(self) -> dict:
         """ convert object to dict for easier seralization """
         return {'label': self.label,
                 'x': self.x, 'y': self.y, 'sag_i': self.z, 'timestamp': self.timestamp,
-                'rating': self.rating, 'note': self.note, 
+                'rating': self.rating, 'note': self.note,
                 'user': self.user}
 
 class StructImg:
@@ -177,6 +194,13 @@ class StructImg:
         self.zoom_left = max(self.idx_cor - self.zoom_width//2,0)
         self.crop_size = (0,0) # set in sag_zoom, used by place_point
 
+    def update_zoom(self, fac):
+        """
+        change zoom box
+        @param fac scale factor"""
+        self.zoom_fac = fac
+        self.zoom_top = self.pixdim[2]//fac
+
     def npimg(self, x):
         minimum = self.min_val
         maximum = self.max_val
@@ -205,15 +229,45 @@ class StructImg:
         this_slice = np.rot90(self.data[self.idx_sag,:,:])
         return self.npimg(this_slice)
 
-    def sag_zoom(self):
-        bottom = 0 # self.sag_top
-        self.zoom_left = max(self.idx_cor - self.zoom_width//2,0)
-        right = min(self.zoom_left + self.zoom_width, self.pixdim[2])
+    def sag_zoom_matrix(self, rot=0):
+        """
+        Zoom in on optionally rotated sagital image.
 
-        this_slice = np.rot90(self.data[self.idx_sag, self.zoom_left:right, bottom:self.zoom_top])
+        @param rot how much to rotate
+        """
+        full_slice = np.rot90(self.data[self.idx_sag,:,:])
+
+        h, w = full_slice.shape
+        if rot != 0:
+            M = cv2.getRotationMatrix2D((0, h), rot, 1)
+            full_slice = cv2.warpAffine(full_slice, M, (w, h))
+
+        self.zoom_left = max(self.idx_cor - self.zoom_width//2,0)
+        right = min(self.zoom_left + self.zoom_width, w)
+
+        this_slice = full_slice[(h-self.zoom_top):h, self.zoom_left:right]
+
         self.crop_size = (this_slice.shape[1]*self.zoom_fac, this_slice.shape[0]*self.zoom_fac)
         res = cv2.resize(this_slice, self.crop_size, interpolation=cv2.INTER_NEAREST)
-        return self.npimg(res)
+        return res
+
+    def sag_zoom(self):
+        return self.npimg(self.sag_zoom_matrix())
+
+
+    def point_onto_zoom(self, real_x, real_y):
+        "project sagital points onto zoomed frame"""
+        x = (real_x - self.zoom_left)*self.zoom_fac
+        y = (real_y - self.pixdim[2])*self.zoom_fac + self.crop_size[1]
+        return x, y
+
+    def zoom_onto_full(self, x, y):
+        """zoom x,y coord onto full image"""
+        real_x = x/self.zoom_fac + self.zoom_left
+        #                    256 - (255-56)/3
+        real_y = self.pixdim[2] -  (self.crop_size[1] - y)/self.zoom_fac
+        real_x, real_y = np.round([real_x, real_y], 2)
+        return real_x, real_y
 
 class FileLister(tk.Frame):
     def __init__(self, master, mainwindow, fnames):
@@ -239,8 +293,6 @@ class FileLister(tk.Frame):
         # does this take too long?
         self.color_files()
 
-
-
     def update_file(self, e):
         """
         change file
@@ -265,6 +317,10 @@ class FileLister(tk.Frame):
         :param e: triggering widget/event. ignored
         """
         db_fname = os.path.dirname(__file__) + "/cspine.db"
+        if not os.path.exists(db_fname):
+            print(f"WARNING: no DB (yet) at {db_fname}. can't color")
+            return
+        print(f"opening {db_fname} to` color")
         db = fetch_full_db(db_fname)
         all_files = [x['image'] for x in db]
         for i, fname in enumerate(self.file_list.get(0,tk.END)):
@@ -306,6 +362,13 @@ class App(tk.Frame):
         self.file_window = FileLister(tk.Tk(), self, fnames)
         self.master.bind("<Destroy>", self.on_destroy)
 
+        menubar = tk.Menu(self.master)
+        self.master.config(menu=menubar)
+
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Load from DB", command=self.load_current_from_db)
+
         self.savedir : Optional[os.PathLike]  = savedir
 
         self.point_locs : Dict[str, CSpinePoint] = {l: CSpinePoint(l) for l in LABELS}
@@ -313,7 +376,12 @@ class App(tk.Frame):
         # protect from garbage collection
         self.slice_cor = None
         self.slice_sag = None
-        self.guide_img = ImageTk.PhotoImage(file=os.path.dirname(__file__) + "/guide-image-small.png")
+
+        guide_image = os.path.dirname(__file__) + "/guide-image-small.png"
+        if os.path.exists(guide_image):
+            self.guide_img = ImageTk.PhotoImage(file=guide_image)
+        else:
+            self.guide_img = ImageTk.PhotoImage(image=Image.fromarray(np.zeros((183,389))))
         # need to pack root before anything else will show
         self.pack()
 
@@ -329,11 +397,36 @@ class App(tk.Frame):
         cor = self.img.slice_sag()
         sag = self.img.slice_cor()
 
+        self.frame = tk.Frame(self)
+
+        # this defined early so sag_zoom can look into it
+        self.point_idx = tk.IntVar(self)
+        self.zoom_rot = tk.StringVar()
+        self.zoom_rot.set("0")
+        self.rot_label = ttk.Entry(self.frame,textvariable=self.zoom_rot, width=4)
+
         zoom_data = self.img.sag_zoom()
-        self.zoom = tk.Canvas(self,width=zoom_data.width(), height=zoom_data.height(), background="red")
+        self.zoom = tk.Canvas(self.frame,width=zoom_data.width(), height=zoom_data.height(), background="red")
         self.c_cor= tk.Canvas(self, width=sag.width(), height=sag.height(), background="black")
         self.c_sag= tk.Canvas(self, width=cor.width(), height=cor.height(), background="black")
         self.c_guide =tk.Canvas(self, width=self.guide_img.width(), height=self.guide_img.height(), background="black")
+
+        self.rot_left = ttk.Button(self.frame,text="⮌")
+        self.rot_right = ttk.Button(self.frame,text="⮎")
+        self.rot_left.bind("<Button-1>", self.rot_btn_click)
+        self.rot_right.bind("<Button-1>", self.rot_btn_click)
+
+        self.scale_zoom = ttk.Scale(self.frame, from_=1, to=6,
+                                    orient=tk.HORIZONTAL,
+                                    command=self.update_zoom)
+        self.scale_zoom.set(self.img.zoom_fac)
+
+        # manage frame
+        self.scale_zoom.grid(row=0,column=0,columnspan=3)
+        self.zoom.grid(row=1,column=0,columnspan=3)
+        self.rot_left.grid(row=2,column=0)
+        self.rot_right.grid(row=2,column=1)
+        self.rot_label.grid(row=2,column=2)
 
         # Bind the mouse click event
         self.zoom.bind("<Button-1>", self.place_point)
@@ -342,14 +435,20 @@ class App(tk.Frame):
         self.zoom.bind("<Button-2>", lambda _: self.next_label(-1))
 
         self.c_cor.bind("<Button-1>", self.place_line)
+
         self.c_sag.bind("<Button-1>", self.place_line)
 
         self.c_guide.pack(side=tk.LEFT)
         self.c_cor.pack(side=tk.LEFT)
         self.c_sag.pack(side=tk.LEFT)
-        self.zoom.pack(side=tk.LEFT)
+        self.frame.pack(side=tk.LEFT)
 
-        self.point_idx = tk.IntVar(self)
+
+
+
+        #self.zoom.pack(side=tk.LEFT)
+        self.frame.pack(side=tk.LEFT)
+
         self.point_labels = tk.Listbox(self)
         self.point_labels.bind("<<ListboxSelect>>", self.label_select_change)
 
@@ -399,6 +498,9 @@ class App(tk.Frame):
         point = self.point_locs[label]
         return point
 
+    def update_zoom(self, event):
+        self.img.update_zoom(int(self.scale_zoom.get()))
+        self.draw_images()
 
     def match_rating(self):
         "after changing to set a label, update raiting and note display"
@@ -478,24 +580,68 @@ class App(tk.Frame):
         self.img.idx_sag += change
         self.draw_images()
 
+    def point_to_image(self, point: CSpinePoint) -> tuple[2]:
+        """Move from point on brain to where it's displayed on the image"""
+        real_x = point.x
+        real_y = point.y
+
+        # apply rotation to stored point
+        M = self.get_rot()
+        unrot = np.dot(M, np.array([real_x, real_y, 1]))
+        real_x, real_y = np.round(unrot[:2],2)
+
+        x, y = self.img.point_onto_zoom(real_x, real_y)
+        return x, y
+
+
     def redraw_point(self, i):
         "using stored 'real' x,y to redraw cspine label locations."
         label = LABELS[i]
         point = self.point_locs[label]
         if not point.x or not point.y:
             return
-
-        real_x = point.x
-        real_y = point.y
-        x = (real_x - self.img.zoom_left)*self.img.zoom_fac
-        y = (real_y - self.img.pixdim[2])*self.img.zoom_fac + self.img.crop_size[1]
+        x, y = self.point_to_image(point)
 
         r = 10//2
         self.zoom.create_oval(x-r, y-r, x+r, y+r, fill=point.color, outline='white')
-        self.c_sag.create_oval(real_x-1,real_y-1,real_x+1,real_y+1,fill=point.color)
-        self.c_cor.create_oval(self.img.idx_sag-1, real_y-1,
-                               self.img.idx_sag+1, real_y+1,
+        self.c_sag.create_oval(point.x-1,point.y-1,point.x+1,point.y+1,fill=point.color)
+        self.c_cor.create_oval(self.img.idx_sag-1, point.y-1,
+                               self.img.idx_sag+1, point.y+1,
                                fill="red")
+
+    def rot_btn_click(self, event):
+        """
+        update rotation
+        """
+        try:
+            val = float(self.zoom_rot.get())
+        except e:
+            val = 0
+        if event.widget == self.rot_left:
+            val += .5
+        elif event.widget == self.rot_right:
+            val -= .5
+        else:
+            print("ERROR: unknown widget %s", event.widget)
+            return
+        self.zoom_rot.set(str(val))
+        self.redraw_zoom_window()
+
+    def cursor_to_brain(self, x, y):
+        """
+        translate positoin of cursor click on zoomed and rotated image
+        to coordnate.
+        Use img.zoom_left, img.zoom_fac, image.pixim[2], image.crop_size
+        @param x
+        @param y
+        """
+        real_x, real_y = self.img.zoom_onto_full(x,y)
+
+        if self.zoom_rot.get():
+            M_inv = self.get_rot(inverse=True)
+            unrot = np.dot(M_inv, np.array([real_x, real_y, 1]))
+            real_x, real_y = np.round(unrot[:2],2)
+        return real_x, real_y
 
 
     def place_point(self, event):
@@ -503,15 +649,14 @@ class App(tk.Frame):
         place colored circle on spine when image is clicked
         """
         x, y, c = event.x, event.y, event.widget
-        real_x = x//self.img.zoom_fac + self.img.zoom_left
-        # 256 - (255-56)//3
-        real_y = self.img.pixdim[2] -  (self.img.crop_size[1] - y)//self.img.zoom_fac
+        real_x, real_y = self.cursor_to_brain(event.x, event.y)
+
         #import ipdb;ipdb.set_trace()
 
         i = self.point_idx.get()
         label = LABELS[i]
         point = self.point_locs[label]
-        point.update(real_x, real_y, self.img.idx_sag)
+        point.update(real_x, real_y, self.img.idx_sag, self.zoom_rot.get())
         # when user is not empty
         if this_user := self.user_text.get():
             point.user = this_user
@@ -573,6 +718,18 @@ class App(tk.Frame):
 
         self.redraw_guide()
 
+    def get_rot(self, h=None, inverse = False):
+        """
+        Wrap py:func:`affine` with  using zoom_rot and crop_size
+        @param inverse get inverse rotation
+        @returns 2D rotation matrix
+        """
+        rot = float(self.zoom_rot.get())
+        #: w,h here; rev of h,w = sag_zoom_matrix().shape[:2]
+        if h is None:
+            h = self.img.crop_size[1]
+        return affine(rot, h, inverse)
+
 
     def redraw_zoom_window(self):
         """overwrite the zoomed area and redraw any placed points.
@@ -580,14 +737,36 @@ class App(tk.Frame):
         for performance, could track circles to delete them instead of redrawing?"""
 
         self.zoom.delete("ALL")
+
+        rot = float(self.zoom_rot.get())
+        zoom = self.img.sag_zoom_matrix(rot)
+        self.zoom_img = self.img.npimg(zoom)
+
+
         self.zoom.create_image(self.zoom_img.width(), self.zoom_img.height(), anchor="se", image=self.zoom_img)
 
-        self.c_sag.create_line(self.img.idx_cor, self.c_sag.winfo_height(), self.img.idx_cor, 0, fill=LINE_COLOR, width=LINE_WIDTH)
-        self.c_cor.create_line(self.img.idx_sag, self.c_cor.winfo_height(), self.img.idx_sag, 0, fill=LINE_COLOR, width=LINE_WIDTH)
+        # TODO: if rot, make sloped line
+        #rot = float(self.zoom_rot.get())
+        #line_end = np.dot(mat, np.array([0, self.c_sag.winfo_height(), 1]))
+        self.c_sag.create_line(self.img.idx_cor, self.c_sag.winfo_height(),
+                               #line_end[0]+self.img.idx_cor,line_end[1],
+                               self.img.idx_cor, 0,
+                               fill=LINE_COLOR, width=LINE_WIDTH)
+
+        self.c_cor.create_line(self.img.idx_sag, self.c_cor.winfo_height(),
+                               self.img.idx_sag, 0,
+                               fill=LINE_COLOR, width=LINE_WIDTH)
 
         # replace all points
         for i in range(len(LABELS)):
             self.redraw_point(i)
+
+
+    def __repr__(self):
+        print(f"input={self.img.fname}; ")
+        print(f"sag={self.img.idx_sag}; cor={self.img.idx_cor};")
+        print(f"crop={self.img.crop_size}; zoom={self.img.zoom_fac};\n")
+        print(f"left={self.img.zoom_left}; pixdim = {self.self.pixdim}\n")
 
 
     def save_full(self, fname:Optional[str] = None):
@@ -645,8 +824,66 @@ class App(tk.Frame):
             conn.commit()
             return cur.lastrowid
 
+    def load_from_db(self, fname):
+        """
+        Load a file from the database, update structimg, populate points, and redraw.
+        @param fname: path to the image file to load from database
+        """
+        fname = os.path.abspath(fname)
+        if not os.path.exists(fname):
+            print("WARNING: {fname} doesn't exist!")
+            return
+        self.img = StructImg(fname)
+        self.reset_points()
 
-if __name__ == "__main__":
+        with sqlite3.connect(self.db_fname) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            # Get the most recent points for each label for this image
+            sql = '''SELECT * FROM point
+                     WHERE image = ?
+                     ORDER BY created DESC'''
+            cur.execute(sql, (fname,))
+            db_points = cur.fetchall()
+
+        if not db_points:
+            print("WARNING: {fname} has no entires in DB!")
+            return
+
+        # can have multiple entries for single point
+        # order by timestamp and only add first (newest) to dict/GUI
+        latest_points = {}
+        for row in db_points:
+            label = row['label']
+            if label not in latest_points:
+                latest_points[label] = row
+        for label, row in latest_points.items():
+            if not label in self.point_locs:
+                continue
+            point = self.point_locs[label]
+            point.update(row['x'], row['y'], row['z'])
+            point.rating = row['rating'] or "NA"
+            point.note = row['note'] or ""
+            point.user = row['user']
+            point.timestamp = row['created']
+
+
+        # coordnates into labels
+        for i, _ in enumerate(LABELS):
+            self.update_label(i)
+        self.point_labels.selection_set(0)
+
+        # get best center line
+        self.img.idx_sag = int(np.mean([p.z for p in self.point_locs.values()]))
+        self.img.idx_cor = int(np.mean([p.x for p in self.point_locs.values()]))
+        print(f"read {len(row)} entires for {fname}. updated z/sag={self.img.idx_cor} x/cor={self.img.idx_sag}")
+        self.draw_images()
+
+    def load_current_from_db(self):
+        """Load the current file from database via menu command"""
+        self.load_from_db(self.img.fname)
+
+def main():
     import sys
     if len(sys.argv) < 2:
         print(f"USAGE: {sys.argv[0]} cspine_image.nii.gz cspine_image2.nii.gz")
@@ -662,3 +899,6 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = App(master=root,savedir=args.output_dir, fnames=args.fnames)
     app.mainloop()
+
+if __name__ == "__main__":
+    main()
